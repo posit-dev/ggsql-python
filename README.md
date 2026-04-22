@@ -1,6 +1,6 @@
 # ggsql
 
-Python bindings for [ggsql](https://github.com/georgestagg/ggsql), a SQL extension for declarative data visualization.
+Python bindings for [ggsql](https://github.com/posit-dev/ggsql), a SQL extension for declarative data visualization.
 
 This package provides Python bindings to the Rust `ggsql` crate, enabling Python users to create visualizations using ggsql's VISUALISE syntax with native Altair chart output.
 
@@ -21,9 +21,9 @@ Building from source requires:
 - [maturin](https://github.com/PyO3/maturin)
 
 ```bash
-# Clone the monorepo
-git clone https://github.com/georgestagg/ggsql.git
-cd ggsql/ggsql-python
+# Clone the repository
+git clone https://github.com/posit-dev/ggsql-python.git
+cd ggsql-python
 
 # Create a virtual environment
 python -m venv .venv
@@ -332,20 +332,14 @@ print(writer.render(spec))
 
 ## Development
 
-### Keeping in sync with the monorepo
-
-The `ggsql-python` package is part of the [ggsql monorepo](https://github.com/posit-dev/ggsql) and depends on the Rust `ggsql` crate via a path dependency. When the Rust crate is updated, you may need to rebuild:
+### Building
 
 ```bash
-cd ggsql-python
-
 # Rebuild after Rust changes
 maturin develop
-
-# If tree-sitter grammar changed, clean and rebuild
-cd .. && cargo clean -p tree-sitter-ggsql && cd ggsql-python
-maturin develop
 ```
+
+To pick up a new version of the upstream `ggsql` Rust crate, bump its version in `Cargo.toml` and re-run `maturin develop`.
 
 ### Running tests
 

@@ -10,48 +10,19 @@ permissions:
   contents: read
 
 env:
-  # Must match the abi3-py3XX feature in ggsql-python/Cargo.toml.
+  # Must match the abi3-py3XX feature in Cargo.toml.
   # abi3 wheels built against 3.10 are forward-compatible with all later
   # Python versions, so this should be the minimum supported version.
   PYTHON_VERSION: "3.10"
 
 jobs:
-  generate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install tree-sitter-cli
-        run: npm install -g tree-sitter-cli
-
-      - name: Generate parser
-        working-directory: tree-sitter-ggsql
-        run: tree-sitter generate
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tree-sitter-generated
-          path: tree-sitter-ggsql/src/
-
   linux:
-    needs: generate
     runs-on: ubuntu-latest
     strategy:
       matrix:
         target: [x86_64, aarch64]
-    env:
-      GGSQL_SKIP_GENERATE: "1"
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: tree-sitter-generated
-          path: tree-sitter-ggsql/src/
 
       - uses: actions/setup-python@v5
         with:
@@ -66,9 +37,6 @@ jobs:
           # aarch64 assembly (missing __ARM_ARCH). 2_28 (AlmaLinux 8, gcc 8+)
           # provides a new enough toolchain.
           manylinux: 2_28
-          # Forward GGSQL_SKIP_GENERATE into the Docker container so the
-          # build script uses the pre-generated parser files.
-          docker-options: -e GGSQL_SKIP_GENERATE=1
 
       - uses: actions/upload-artifact@v4
         with:
@@ -76,7 +44,6 @@ jobs:
           path: dist
 
   macos:
-    needs: generate
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -85,15 +52,8 @@ jobs:
             runner: macos-latest
           - target: aarch64
             runner: macos-latest
-    env:
-      GGSQL_SKIP_GENERATE: "1"
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: tree-sitter-generated
-          path: tree-sitter-ggsql/src/
 
       - uses: actions/setup-python@v5
         with:
@@ -111,17 +71,9 @@ jobs:
           path: dist
 
   windows:
-    needs: generate
     runs-on: windows-latest
-    env:
-      GGSQL_SKIP_GENERATE: "1"
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: tree-sitter-generated
-          path: tree-sitter-ggsql/src/
 
       - uses: actions/setup-python@v5
         with:
@@ -139,17 +91,9 @@ jobs:
           path: dist
 
   sdist:
-    needs: generate
     runs-on: ubuntu-latest
-    env:
-      GGSQL_SKIP_GENERATE: "1"
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: tree-sitter-generated
-          path: tree-sitter-ggsql/src/
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1

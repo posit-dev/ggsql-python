@@ -1,0 +1,7 @@
+# Tell the `tree-sitter-ggsql` crate's build script to use the pre-generated
+# `parser.c` that ships in its crates.io tarball, rather than regenerating it
+# from `grammar.js`. Regeneration depends on a host-installed `tree-sitter-cli`
+# whose version may differ from the one used to produce the shipped parser,
+# which can yield a subtly broken parser (e.g. FACET clauses fail to parse).
+[env]
+GGSQL_SKIP_GENERATE = "1"
