@@ -36,3 +36,6 @@ dev = [
     "pyarrow>=14.0",
     "pytest>=9.0.2",
 ]
+docs = [
+    "great-docs>=0.8 ; python_full_version >= '3.11'",
+]
