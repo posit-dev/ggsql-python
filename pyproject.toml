@@ -20,6 +20,9 @@ dependencies = [
     "polars>=1.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/posit-dev/ggsql-python"
+
 [project.optional-dependencies]
 test = ["pytest>=7.0", "duckdb>=1.0", "pyarrow>=14.0"]
 dev = ["maturin>=1.4"]
@@ -35,4 +38,7 @@ dev = [
     "maturin>=1.11.5",
     "pyarrow>=14.0",
     "pytest>=9.0.2",
+]
+docs = [
+    "great-docs>=0.8 ; python_full_version >= '3.11'",
 ]

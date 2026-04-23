@@ -16,6 +16,12 @@ from ggsql._ggsql import (
     execute,
 )
 
+# PyO3 classes default to __module__ = "builtins"; point them at their real
+# home so docs tooling (great-docs/griffe) can locate them.
+for _cls in (DuckDBReader, _RustVegaLiteWriter, Validated, Spec):
+    _cls.__module__ = "ggsql._ggsql"
+del _cls
+
 __all__ = [
     # Classes
     "DuckDBReader",

@@ -29,3 +29,11 @@ ENV/
 env.bak/
 venv.bak/
 .venv/
+
+# Great Docs build directory (ephemeral, do not commit)
+great-docs/
+
+# Great Docs versioned-build artifacts
+.great-docs-build/
+.great-docs-cache/
+.great-docs/
