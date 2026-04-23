@@ -12,56 +12,15 @@ from ggsql._ggsql import (
     VegaLiteWriter as _RustVegaLiteWriter,
     Validated,
     Spec,
-    validate as _rust_validate,
-    execute as _rust_execute,
+    validate,
+    execute,
 )
 
+# PyO3 classes default to __module__ = "builtins"; point them at their real
+# home so docs tooling (great-docs/griffe) can locate them.
 for _cls in (DuckDBReader, _RustVegaLiteWriter, Validated, Spec):
     _cls.__module__ = "ggsql._ggsql"
 del _cls
-
-DuckDBReader.__doc__ = """DuckDB database reader for executing SQL queries."""
-
-Validated.__doc__ = """Result of :func:`validate` — query inspection without SQL execution."""
-
-Spec.__doc__ = """Resolved visualization specification returned by ``reader.execute()``."""
-
-
-def validate(query: str) -> Validated:
-    """Validate query syntax and semantics without executing SQL.
-
-    Parameters
-    ----------
-    query : str
-        The ggsql query to validate.
-
-    Returns
-    -------
-    Validated
-        Validation result with query inspection methods.
-    """
-    return _rust_validate(query)
-
-
-def execute(query: str, reader: Any) -> Spec:
-    """Execute a ggsql query using a custom Python reader.
-
-    For native readers, prefer :meth:`DuckDBReader.execute` directly.
-
-    Parameters
-    ----------
-    query : str
-        The ggsql query to execute.
-    reader
-        A native Reader or any object with an
-        ``execute_sql(sql: str) -> polars.DataFrame`` method.
-
-    Returns
-    -------
-    Spec
-        The resolved visualization specification ready for rendering.
-    """
-    return _rust_execute(query, reader)
 
 __all__ = [
     # Classes

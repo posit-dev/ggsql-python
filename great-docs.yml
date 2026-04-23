@@ -41,17 +41,26 @@ repo: https://github.com/posit-dev/ggsql-python
 #
 # To show the text title alongside the logo, add: show_title: true
 
+authors:
+  - name: Carson Sievert
+    role: Lead Developer
+    github: cpsievert
+
+  - name: Thomas Lin Pedersen
+    role: Contributor
+    github: thomasp85
+
 # Funding / Copyright Holder
 # --------------------------
 # Credit the organization that funds or holds copyright for this package.
 # Displays in sidebar and footer. Homepage and ROR provide links.
-# funding:
-#   name: "Posit Software, PBC"
-#   roles:
-#     - Copyright holder
-#     - funder
-#   homepage: https://posit.co
-#   ror: https://ror.org/03wc8by49
+funding:
+  name: "Posit Software, PBC"
+  roles:
+    - Copyright holder
+    - funder
+  homepage: https://posit.co
+  ror: https://ror.org/03wc8by49
 
 # API Reference Structure
 # -----------------------
@@ -84,11 +93,13 @@ reference:
 
 # Site Settings
 # -------------
-# site:
-#   theme: flatly              # Quarto theme (default: flatly)
-#   toc: true                  # Show table of contents (default: true)
-#   toc-depth: 2               # TOC heading depth (default: 2)
-#   toc-title: On this page    # TOC title (default: "On this page")
+site:
+  theme: cosmo              # Quarto theme (default: flatly)
+  toc: true                  # Show table of contents (default: true)
+  toc-depth: 2               # TOC heading depth (default: 2)
+  toc-title: On this page    # TOC title (default: "On this page")
+
+navbar_color: "#DEF1EB"
 
 # Jupyter Kernel
 # --------------
