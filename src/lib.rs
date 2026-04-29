@@ -60,10 +60,16 @@ fn py_to_df(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
     let table = if obj.is_instance(&pa.getattr("Table")?)? {
         obj.clone()
     } else {
-        pa.call_method1("table", (obj,)).map_err(|_| {
-            PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                "Expected a pyarrow.Table or compatible type",
-            )
+        pa.call_method1("table", (obj,)).map_err(|e| {
+            let type_name = obj
+                .get_type()
+                .name()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| "<unknown>".to_string());
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+                "Expected a pyarrow.Table or compatible type, got {}: {}",
+                type_name, e
+            ))
         })?
     };
 
