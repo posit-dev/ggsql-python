@@ -44,21 +44,21 @@ pip install target/wheels/ggsql-*.whl
 
 ### Simple Usage with `render_altair`
 
-For quick visualizations, use the `render_altair` convenience function:
+For quick visualizations, use the `render_altair` convenience function. It accepts any narwhals-compatible DataFrame (polars, pandas, pyarrow, etc.):
 
 ```python
 import ggsql
-import polars as pl
+import pyarrow as pa
 
-# Create a DataFrame
-df = pl.DataFrame({
+# Create a table
+table = pa.table({
     "x": [1, 2, 3, 4, 5],
     "y": [10, 20, 15, 30, 25],
     "category": ["A", "B", "A", "B", "A"]
 })
 
 # Render to Altair chart
-chart = ggsql.render_altair(df, "VISUALISE x, y DRAW point")
+chart = ggsql.render_altair(table, "VISUALISE x, y DRAW point")
 
 # Display or save
 chart.display()  # In Jupyter
@@ -71,18 +71,18 @@ For more control, use the two-stage API with explicit reader and writer:
 
 ```python
 import ggsql
-import polars as pl
+import pyarrow as pa
 
 # 1. Create a DuckDB reader
 reader = ggsql.DuckDBReader("duckdb://memory")
 
-# 2. Register your DataFrame as a table
-df = pl.DataFrame({
+# 2. Register your data as a table (accepts pyarrow, polars, pandas, etc.)
+table = pa.table({
     "date": ["2024-01-01", "2024-01-02", "2024-01-03"],
     "revenue": [100, 150, 120],
     "region": ["North", "South", "North"]
 })
-reader.register("sales", df)
+reader.register("sales", table)
 
 # 3. Execute the ggsql query
 spec = reader.execute(
@@ -102,7 +102,7 @@ print(f"Layers: {spec.layer_count()}")
 # 5. Inspect SQL/VISUALISE portions and data
 print(f"SQL: {spec.sql()}")
 print(f"Visual: {spec.visual()}")
-print(spec.layer_data(0))  # Returns polars DataFrame
+print(spec.layer_data(0))  # Returns pyarrow.Table
 
 # 6. Render to Vega-Lite JSON
 writer = ggsql.VegaLiteWriter()
@@ -125,9 +125,9 @@ reader = ggsql.DuckDBReader("duckdb:///path/to/file.db")  # File database
 
 **Methods:**
 
-- `register(name: str, df: polars.DataFrame, replace: bool = False)` - Register a DataFrame as a queryable table
+- `register(name: str, table, replace: bool = False)` - Register data as a queryable table (accepts `pyarrow.Table`, `polars.DataFrame`, `pandas.DataFrame`, etc.)
 - `unregister(name: str)` - Unregister a previously registered table
-- `execute_sql(sql: str) -> polars.DataFrame` - Execute SQL and return results
+- `execute_sql(sql: str) -> pyarrow.Table` - Execute SQL and return results
 
 #### `VegaLiteWriter()`
 
@@ -161,9 +161,9 @@ Result of `reader.execute()`, containing resolved visualization ready for render
 - `sql() -> str` - The executed SQL query
 - `visual() -> str` - The VISUALISE clause
 - `layer_count() -> int` - Number of DRAW layers
-- `data() -> polars.DataFrame | None` - Main query result DataFrame
-- `layer_data(index: int) -> polars.DataFrame | None` - Layer-specific data (if filtered)
-- `stat_data(index: int) -> polars.DataFrame | None` - Statistical transform data
+- `data() -> pyarrow.Table | None` - Main query result data
+- `layer_data(index: int) -> pyarrow.Table | None` - Layer-specific data (if filtered)
+- `stat_data(index: int) -> pyarrow.Table | None` - Statistical transform data
 - `layer_sql(index: int) -> str | None` - Layer filter SQL
 - `stat_sql(index: int) -> str | None` - Stat transform SQL
 - `warnings() -> list[dict]` - Validation warnings from execution
@@ -205,11 +205,11 @@ Convenience function to render a DataFrame with a VISUALISE spec to an Altair ch
 **Returns:** An Altair chart object (Chart, LayerChart, FacetChart, etc.)
 
 ```python
-import polars as pl
+import pyarrow as pa
 import ggsql
 
-df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
-chart = ggsql.render_altair(df, "VISUALISE x, y DRAW point")
+table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+chart = ggsql.render_altair(table, "VISUALISE x, y DRAW point")
 ```
 
 ## Examples
@@ -217,28 +217,31 @@ chart = ggsql.render_altair(df, "VISUALISE x, y DRAW point")
 ### Mapping Styles
 
 ```python
-df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30], "category": ["A", "B", "A"]})
+import pyarrow as pa
+
+table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30], "category": ["A", "B", "A"]})
 
 # Explicit mapping
-ggsql.render_altair(df, "VISUALISE x AS x, y AS y DRAW point")
+ggsql.render_altair(table, "VISUALISE x AS x, y AS y DRAW point")
 
 # Implicit mapping (column name = aesthetic name)
-ggsql.render_altair(df, "VISUALISE x, y DRAW point")
+ggsql.render_altair(table, "VISUALISE x, y DRAW point")
 
 # Wildcard mapping (map all matching columns)
-ggsql.render_altair(df, "VISUALISE * DRAW point")
+ggsql.render_altair(table, "VISUALISE * DRAW point")
 
 # With color encoding
-ggsql.render_altair(df, "VISUALISE x, y, category AS color DRAW point")
+ggsql.render_altair(table, "VISUALISE x, y, category AS color DRAW point")
 ```
 
 ### Custom Readers
 
-You can use any Python object with an `execute_sql(sql: str) -> polars.DataFrame` method as a reader. This enables integration with any data source.
+You can use any Python object with an `execute_sql(sql: str)` method as a reader. The method should return a `pyarrow.Table` (or any type that `pyarrow.table()` can convert, such as a `polars.DataFrame`).
 
 ```python
 import ggsql
-import polars as pl
+import pyarrow as pa
+import pyarrow.csv
 
 class CSVReader:
     """Custom reader that loads data from CSV files."""
@@ -246,10 +249,10 @@ class CSVReader:
     def __init__(self, data_dir: str):
         self.data_dir = data_dir
 
-    def execute_sql(self, sql: str) -> pl.DataFrame:
+    def execute_sql(self, sql: str) -> pa.Table:
         # Simple implementation: ignore SQL and return fixed data
         # A real implementation would parse SQL to determine which file to load
-        return pl.read_csv(f"{self.data_dir}/data.csv")
+        return pyarrow.csv.read_csv(f"{self.data_dir}/data.csv")
 
 # Use custom reader with ggsql.execute()
 reader = CSVReader("/path/to/data")
@@ -263,7 +266,7 @@ json_output = writer.render(spec)
 
 **Additional methods** for custom readers:
 
-- `register(name: str, df: polars.DataFrame, replace: bool = False) -> None` - Register a DataFrame as a queryable table (required)
+- `register(name: str, table, replace: bool = False) -> None` - Register data as a queryable table (required). Receives a `pyarrow.Table`.
 - `unregister(name: str) -> None` - Unregister a previously registered table (optional)
 
 ```python
@@ -273,12 +276,12 @@ class AdvancedReader:
     def __init__(self):
         self.tables = {}
 
-    def execute_sql(self, sql: str) -> pl.DataFrame:
+    def execute_sql(self, sql: str) -> pa.Table:
         # Your SQL execution logic here
         ...
 
-    def register(self, name: str, df: pl.DataFrame, replace: bool = False) -> None:
-        self.tables[name] = df
+    def register(self, name: str, table: pa.Table, replace: bool = False) -> None:
+        self.tables[name] = table
 
     def unregister(self, name: str) -> None:
         del self.tables[name]
@@ -292,7 +295,7 @@ Native readers like `DuckDBReader` use an optimized fast path, while custom Pyth
 
 ```python
 import ggsql
-import polars as pl
+import pyarrow as pa
 import ibis
 
 class IbisReader:
@@ -305,22 +308,22 @@ class IbisReader:
             self.con = ibis.sqlite.connect()
         # Add other backends as needed
 
-    def execute_sql(self, sql: str) -> pl.DataFrame:
-        return self.con.con.execute(sql).pl()
+    def execute_sql(self, sql: str) -> pa.Table:
+        return self.con.con.execute(sql).arrow()
 
-    def register(self, name: str, df: pl.DataFrame, replace: bool = False) -> None:
-        self.con.create_table(name, df.to_arrow(), overwrite=replace)
+    def register(self, name: str, table: pa.Table, replace: bool = False) -> None:
+        self.con.create_table(name, table, overwrite=replace)
 
     def unregister(self, name: str) -> None:
         self.con.drop_table(name)
 
 # Usage
 reader = IbisReader()
-df = pl.DataFrame({
+table = pa.table({
     "date": ["2024-01-01", "2024-01-02", "2024-01-03"],
     "revenue": [100, 150, 120],
 })
-reader.register("sales", df)
+reader.register("sales", table)
 
 spec = ggsql.execute(
     "SELECT * FROM sales VISUALISE date AS x, revenue AS y DRAW line",
@@ -356,7 +359,7 @@ pytest tests/ -v
 - Python >= 3.10
 - altair >= 5.0
 - narwhals >= 2.15
-- polars >= 1.0
+- pyarrow >= 14.0
 
 ## License
 
