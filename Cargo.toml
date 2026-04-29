@@ -14,8 +14,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.26", features = ["extension-module", "abi3-py310"] }
-polars = { version = "0.52", default-features = false, features = ["ipc"] }
-ggsql = { version = "0.2.7", default-features = false, features = ["duckdb", "vegalite"] }
+arrow = { version = "56", default-features = false, features = ["ipc"] }
+ggsql = { version = "0.3.0", default-features = false, features = ["duckdb", "vegalite"] }
 
 [features]
 default = []

@@ -11,6 +11,7 @@ Rust logic (parsing, Vega-Lite generation) is tested in the Rust test suite.
 import json
 
 import duckdb
+import pyarrow as pa
 import pytest
 import polars as pl
 import altair
@@ -71,18 +72,18 @@ class TestDuckDBReader:
 
     def test_execute_simple_query(self):
         reader = ggsql.DuckDBReader("duckdb://memory")
-        df = reader.execute_sql("SELECT 1 AS x, 2 AS y")
-        assert isinstance(df, pl.DataFrame)
-        assert df.shape == (1, 2)
-        assert list(df.columns) == ["x", "y"]
+        table = reader.execute_sql("SELECT 1 AS x, 2 AS y")
+        assert isinstance(table, pa.Table)
+        assert table.shape == (1, 2)
+        assert table.column_names == ["x", "y"]
 
     def test_register_and_query(self):
         reader = ggsql.DuckDBReader("duckdb://memory")
-        df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
-        reader.register("my_data", df)
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        reader.register("my_data", table)
 
         result = reader.execute_sql("SELECT * FROM my_data WHERE x > 1")
-        assert isinstance(result, pl.DataFrame)
+        assert isinstance(result, pa.Table)
         assert result.shape == (2, 2)
 
     def test_invalid_connection_string(self):
@@ -142,7 +143,7 @@ class TestExecute:
         reader = ggsql.DuckDBReader("duckdb://memory")
         spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
         data = spec.data()
-        assert isinstance(data, pl.DataFrame)
+        assert isinstance(data, pa.Table)
         assert data.shape == (1, 2)
 
     def test_execute_without_visualise_fails(self):
