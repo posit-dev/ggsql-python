@@ -25,13 +25,12 @@ fn df_to_py(py: Python<'_>, df: &DataFrame) -> PyResult<Py<PyAny>> {
     let rb = df.inner();
     let mut buffer = Vec::new();
     {
-        let mut writer = StreamWriter::try_new(&mut buffer, &rb.schema())
-            .map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "Failed to create IPC writer: {}",
-                    e
-                ))
-            })?;
+        let mut writer = StreamWriter::try_new(&mut buffer, &rb.schema()).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Failed to create IPC writer: {}",
+                e
+            ))
+        })?;
         writer.write(rb).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Failed to write RecordBatch: {}",
@@ -79,10 +78,7 @@ fn py_to_df(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
 
     let cursor = Cursor::new(ipc_bytes);
     let reader = StreamReader::try_new(cursor, None).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Failed to read IPC stream: {}",
-            e
-        ))
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to read IPC stream: {}", e))
     })?;
 
     let batches: Vec<_> = reader
@@ -99,14 +95,9 @@ fn py_to_df(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
         return Ok(DataFrame::empty());
     }
 
-    let combined = arrow::compute::concat_batches(&batches[0].schema(), &batches).map_err(
-        |e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Failed to concat batches: {}",
-                e
-            ))
-        },
-    )?;
+    let combined = arrow::compute::concat_batches(&batches[0].schema(), &batches).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to concat batches: {}", e))
+    })?;
 
     Ok(DataFrame::from_record_batch(combined))
 }
@@ -181,8 +172,7 @@ impl Reader for PyReaderBridge {
 
     fn register(&self, name: &str, df: DataFrame, replace: bool) -> ggsql::Result<()> {
         Python::attach(|py| {
-            let py_table =
-                df_to_py(py, &df).map_err(|e| GgsqlError::ReaderError(e.to_string()))?;
+            let py_table = df_to_py(py, &df).map_err(|e| GgsqlError::ReaderError(e.to_string()))?;
             self.obj
                 .bind(py)
                 .call_method1("register", (name, py_table, replace))
