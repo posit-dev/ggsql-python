@@ -33,7 +33,7 @@ __all__ = [
     "execute",
     "render_altair",
 ]
-__version__ = "0.2.7"
+__version__ = "0.3.0"
 
 # Type alias for any Altair chart type
 AltairChart = Union[
@@ -136,11 +136,11 @@ def render_altair(
     if not isinstance(df, nw.DataFrame):
         raise TypeError("df must be a narwhals DataFrame or compatible type")
 
-    pl_df = df.to_polars()
+    arrow_table = df.to_arrow()
 
     # Create temporary reader and register data
     reader = DuckDBReader("duckdb://memory")
-    reader.register("__data__", pl_df)
+    reader.register("__data__", arrow_table)
 
     # Build full query: SELECT * FROM __data__ + VISUALISE clause
     query = f"SELECT * FROM __data__ {viz}"

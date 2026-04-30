@@ -11,13 +11,20 @@ Rust logic (parsing, Vega-Lite generation) is tested in the Rust test suite.
 import json
 
 import duckdb
+import pyarrow as pa
 import pytest
-import polars as pl
 import altair
 
 import ggsql
 
-# Optional dependency for ibis test
+# Optional dependencies
+try:
+    import polars as pl
+
+    HAS_POLARS = True
+except ImportError:
+    HAS_POLARS = False
+
 try:
     import ibis
 
@@ -71,18 +78,29 @@ class TestDuckDBReader:
 
     def test_execute_simple_query(self):
         reader = ggsql.DuckDBReader("duckdb://memory")
-        df = reader.execute_sql("SELECT 1 AS x, 2 AS y")
-        assert isinstance(df, pl.DataFrame)
-        assert df.shape == (1, 2)
-        assert list(df.columns) == ["x", "y"]
+        table = reader.execute_sql("SELECT 1 AS x, 2 AS y")
+        assert isinstance(table, pa.Table)
+        assert table.shape == (1, 2)
+        assert table.column_names == ["x", "y"]
 
     def test_register_and_query(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        reader.register("my_data", table)
+
+        result = reader.execute_sql("SELECT * FROM my_data WHERE x > 1")
+        assert isinstance(result, pa.Table)
+        assert result.shape == (2, 2)
+
+    @pytest.mark.skipif(not HAS_POLARS, reason="polars not installed")
+    def test_register_polars_dataframe(self):
+        """register() accepts polars DataFrames via automatic conversion."""
         reader = ggsql.DuckDBReader("duckdb://memory")
         df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
         reader.register("my_data", df)
 
         result = reader.execute_sql("SELECT * FROM my_data WHERE x > 1")
-        assert isinstance(result, pl.DataFrame)
+        assert isinstance(result, pa.Table)
         assert result.shape == (2, 2)
 
     def test_invalid_connection_string(self):
@@ -109,8 +127,8 @@ class TestExecute:
 
     def test_execute_with_registered_data(self):
         reader = ggsql.DuckDBReader("duckdb://memory")
-        df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
-        reader.register("data", df)
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        reader.register("data", table)
 
         spec = reader.execute("SELECT * FROM data VISUALISE x, y DRAW point")
         assert spec.metadata()["rows"] == 3
@@ -142,7 +160,7 @@ class TestExecute:
         reader = ggsql.DuckDBReader("duckdb://memory")
         spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
         data = spec.data()
-        assert isinstance(data, pl.DataFrame)
+        assert isinstance(data, pa.Table)
         assert data.shape == (1, 2)
 
     def test_execute_without_visualise_fails(self):
@@ -168,8 +186,8 @@ class TestWriterRender:
 
     def test_render_contains_data(self):
         reader = ggsql.DuckDBReader("duckdb://memory")
-        df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
-        reader.register("data", df)
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        reader.register("data", table)
 
         spec = reader.execute("SELECT * FROM data VISUALISE x, y DRAW point")
         writer = ggsql.VegaLiteWriter()
@@ -197,11 +215,18 @@ class TestWriterRender:
 class TestRenderAltairDataFrameConversion:
     """Tests for DataFrame handling in render_altair()."""
 
+    def test_accepts_pyarrow_table(self):
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        chart = ggsql.render_altair(table, "VISUALISE x, y DRAW point")
+        assert isinstance(chart, altair.TopLevelMixin)
+
+    @pytest.mark.skipif(not HAS_POLARS, reason="polars not installed")
     def test_accepts_polars_dataframe(self):
         df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
         chart = ggsql.render_altair(df, "VISUALISE x, y DRAW point")
         assert isinstance(chart, altair.TopLevelMixin)
 
+    @pytest.mark.skipif(not HAS_POLARS, reason="polars not installed")
     def test_accepts_polars_lazyframe(self):
         lf = pl.LazyFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
         chart = ggsql.render_altair(lf, "VISUALISE x, y DRAW point")
@@ -210,8 +235,8 @@ class TestRenderAltairDataFrameConversion:
     def test_accepts_narwhals_dataframe(self):
         import narwhals as nw
 
-        pl_df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
-        nw_df = nw.from_native(pl_df)
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        nw_df = nw.from_native(table)
 
         chart = ggsql.render_altair(nw_df, "VISUALISE x, y DRAW point")
         assert isinstance(chart, altair.TopLevelMixin)
@@ -232,20 +257,20 @@ class TestRenderAltairReturnType:
     """Tests for render_altair() return type."""
 
     def test_returns_altair_chart(self):
-        df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
-        chart = ggsql.render_altair(df, "VISUALISE x, y DRAW point")
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        chart = ggsql.render_altair(table, "VISUALISE x, y DRAW point")
         assert isinstance(chart, altair.TopLevelMixin)
 
     def test_chart_has_data(self):
-        df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
-        chart = ggsql.render_altair(df, "VISUALISE x, y DRAW point")
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        chart = ggsql.render_altair(table, "VISUALISE x, y DRAW point")
         spec = chart.to_dict()
         # Data should be embedded in datasets
         assert "datasets" in spec
 
     def test_chart_can_be_serialized(self):
-        df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
-        chart = ggsql.render_altair(df, "VISUALISE x, y DRAW point")
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        chart = ggsql.render_altair(table, "VISUALISE x, y DRAW point")
         # Should not raise
         json_str = chart.to_json()
         assert len(json_str) > 0
@@ -256,15 +281,15 @@ class TestRenderAltairChartTypeDetection:
 
     def test_simple_chart_returns_layer_chart(self):
         """Simple DRAW specs produce LayerChart (ggsql always wraps in layer)."""
-        df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
-        chart = ggsql.render_altair(df, "VISUALISE x, y DRAW point")
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        chart = ggsql.render_altair(table, "VISUALISE x, y DRAW point")
         # ggsql wraps all charts in a layer
         assert isinstance(chart, altair.LayerChart)
 
     def test_layered_chart_can_round_trip(self):
         """LayerChart can be converted to dict and back."""
-        df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
-        chart = ggsql.render_altair(df, "VISUALISE x, y DRAW point")
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        chart = ggsql.render_altair(table, "VISUALISE x, y DRAW point")
 
         # Convert to dict and back
         spec = chart.to_dict()
@@ -276,7 +301,7 @@ class TestRenderAltairChartTypeDetection:
 
     def test_faceted_chart_returns_facet_chart(self):
         """FACET specs produce FacetChart."""
-        df = pl.DataFrame(
+        table = pa.table(
             {
                 "x": [1, 2, 3, 4, 5, 6],
                 "y": [10, 20, 30, 40, 50, 60],
@@ -285,13 +310,13 @@ class TestRenderAltairChartTypeDetection:
         )
         # Need validate=False because ggsql produces v6 specs
         chart = ggsql.render_altair(
-            df, "VISUALISE x, y FACET group DRAW point", validate=False
+            table, "VISUALISE x, y FACET group DRAW point", validate=False
         )
         assert isinstance(chart, altair.FacetChart)
 
     def test_faceted_chart_can_round_trip(self):
         """FacetChart can be converted to dict and back."""
-        df = pl.DataFrame(
+        table = pa.table(
             {
                 "x": [1, 2, 3, 4, 5, 6],
                 "y": [10, 20, 30, 40, 50, 60],
@@ -299,7 +324,7 @@ class TestRenderAltairChartTypeDetection:
             }
         )
         chart = ggsql.render_altair(
-            df, "VISUALISE x, y FACET group DRAW point", validate=False
+            table, "VISUALISE x, y FACET group DRAW point", validate=False
         )
 
         # Convert to dict (skip validation for ggsql specs)
@@ -312,14 +337,16 @@ class TestRenderAltairChartTypeDetection:
 
     def test_chart_with_color_encoding(self):
         """Charts with color encoding still return correct type."""
-        df = pl.DataFrame(
+        table = pa.table(
             {
                 "x": [1, 2, 3, 4],
                 "y": [10, 20, 30, 40],
                 "category": ["A", "B", "A", "B"],
             }
         )
-        chart = ggsql.render_altair(df, "VISUALISE x, y, category AS color DRAW point")
+        chart = ggsql.render_altair(
+            table, "VISUALISE x, y, category AS color DRAW point"
+        )
         # Should still be a LayerChart (ggsql wraps in layer)
         assert isinstance(chart, altair.LayerChart)
 
@@ -328,9 +355,9 @@ class TestRenderAltairErrorHandling:
     """Tests for error handling in render_altair()."""
 
     def test_invalid_viz_raises(self):
-        df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
         with pytest.raises(ValueError):
-            ggsql.render_altair(df, "NOT VALID SYNTAX")
+            ggsql.render_altair(table, "NOT VALID SYNTAX")
 
 
 class TestTwoStageAPIIntegration:
@@ -342,14 +369,14 @@ class TestTwoStageAPIIntegration:
         reader = ggsql.DuckDBReader("duckdb://memory")
 
         # Register data
-        df = pl.DataFrame(
+        table = pa.table(
             {
                 "date": ["2024-01-01", "2024-01-02", "2024-01-03"],
                 "value": [10, 20, 30],
                 "region": ["North", "South", "North"],
             }
         )
-        reader.register("sales", df)
+        reader.register("sales", table)
 
         # Execute visualization
         spec = reader.execute(
@@ -399,11 +426,11 @@ class TestCustomReader:
             def __init__(self):
                 self.conn = duckdb.connect()
 
-            def execute_sql(self, sql: str) -> pl.DataFrame:
-                return self.conn.execute(sql).pl()
+            def execute_sql(self, sql: str) -> pa.Table:
+                return self.conn.execute(sql).arrow()
 
-            def register(self, name: str, df: pl.DataFrame, _replace: bool) -> None:
-                self.conn.register(name, df)
+            def register(self, name: str, table: pa.Table, _replace: bool) -> None:
+                self.conn.register(name, table)
 
         reader = RegisterReader()
         spec = ggsql.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point", reader)
@@ -413,7 +440,7 @@ class TestCustomReader:
         """Custom reader errors are propagated."""
 
         class ErrorReader:
-            def execute_sql(self, sql: str) -> pl.DataFrame:
+            def execute_sql(self, sql: str) -> pa.Table:
                 raise ValueError("Custom reader error")
 
         reader = ErrorReader()
@@ -425,7 +452,7 @@ class TestCustomReader:
 
         class WrongTypeReader:
             def execute_sql(self, sql: str):
-                return {"x": [1, 2, 3]}  # dict, not DataFrame
+                return {"x": [1, 2, 3]}  # dict, not Table
 
         reader = WrongTypeReader()
         with pytest.raises((ValueError, TypeError)):
@@ -450,11 +477,11 @@ class TestCustomReader:
                     ") AS t(x, y, category)"
                 )
 
-            def execute_sql(self, sql: str) -> pl.DataFrame:
-                return self.conn.execute(sql).pl()
+            def execute_sql(self, sql: str) -> pa.Table:
+                return self.conn.execute(sql).arrow()
 
-            def register(self, name: str, df: pl.DataFrame, _replace: bool) -> None:
-                self.conn.register(name, df)
+            def register(self, name: str, table: pa.Table, _replace: bool) -> None:
+                self.conn.register(name, table)
 
         reader = DuckDBBackedReader()
         spec = ggsql.execute(
@@ -480,12 +507,12 @@ class TestCustomReader:
                 )
                 self.execute_calls = []
 
-            def execute_sql(self, sql: str) -> pl.DataFrame:
+            def execute_sql(self, sql: str) -> pa.Table:
                 self.execute_calls.append(sql)
-                return self.conn.execute(sql).pl()
+                return self.conn.execute(sql).arrow()
 
-            def register(self, name: str, df: pl.DataFrame, _replace: bool) -> None:
-                self.conn.register(name, df)
+            def register(self, name: str, table: pa.Table, _replace: bool) -> None:
+                self.conn.register(name, table)
 
         reader = RecordingReader()
         ggsql.execute(
@@ -506,20 +533,20 @@ class TestCustomReader:
             def __init__(self):
                 self.con = ibis.duckdb.connect()
 
-            def execute_sql(self, sql: str) -> pl.DataFrame:
-                return self.con.con.execute(sql).pl()
+            def execute_sql(self, sql: str) -> pa.Table:
+                return self.con.con.execute(sql).arrow()
 
             def register(
-                self, name: str, df: pl.DataFrame, replace: bool = True
+                self, name: str, table: pa.Table, replace: bool = True
             ) -> None:
-                self.con.create_table(name, df.to_arrow(), overwrite=replace)
+                self.con.create_table(name, table, overwrite=replace)
 
             def unregister(self, name: str) -> None:
                 self.con.drop_table(name)
 
         reader = IbisReader()
-        df = pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
-        reader.register("mydata", df)
+        table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
+        reader.register("mydata", table)
 
         spec = ggsql.execute(
             "SELECT * FROM mydata VISUALISE x, y DRAW point",
@@ -554,18 +581,17 @@ class TestVegaLiteWriterRenderChart:
     def test_render_chart_facet(self):
         """render_chart() returns FacetChart for faceted specs."""
         reader = ggsql.DuckDBReader("duckdb://memory")
-        df = pl.DataFrame(
+        table = pa.table(
             {
                 "x": [1, 2, 3, 4, 5, 6],
                 "y": [10, 20, 30, 40, 50, 60],
                 "group": ["A", "A", "A", "B", "B", "B"],
             }
         )
-        reader.register("data", df)
+        reader.register("data", table)
         spec = reader.execute(
             "SELECT * FROM data VISUALISE x, y FACET group DRAW point"
         )
         writer = ggsql.VegaLiteWriter()
         chart = writer.render_chart(spec, validate=False)
         assert isinstance(chart, altair.FacetChart)
-

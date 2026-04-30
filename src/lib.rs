@@ -6,77 +6,113 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use std::io::Cursor;
 
+use arrow::ipc::reader::StreamReader;
+use arrow::ipc::writer::StreamWriter;
+
+use ggsql::dataframe::DataFrame;
 use ggsql::reader::Spec;
 use ggsql::reader::{DuckDBReader as RustDuckDBReader, Reader};
 use ggsql::validate::{validate as rust_validate, ValidationWarning};
 use ggsql::writer::{VegaLiteWriter as RustVegaLiteWriter, Writer as RustWriter};
 use ggsql::GgsqlError;
 
-use polars::prelude::{DataFrame, IpcReader, IpcWriter, SerReader, SerWriter};
-
 // ============================================================================
 // Helper Functions for DataFrame Conversion
 // ============================================================================
 
-/// Convert a Polars DataFrame to a Python polars DataFrame via IPC serialization
-fn polars_to_py(py: Python<'_>, df: &DataFrame) -> PyResult<Py<PyAny>> {
+/// Convert a ggsql DataFrame to a Python pyarrow Table via Arrow IPC serialization
+fn df_to_py(py: Python<'_>, df: &DataFrame) -> PyResult<Py<PyAny>> {
+    let rb = df.inner();
     let mut buffer = Vec::new();
-    IpcWriter::new(&mut buffer)
-        .finish(&mut df.clone())
+    {
+        let mut writer = StreamWriter::try_new(&mut buffer, &rb.schema()).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Failed to create IPC writer: {}",
+                e
+            ))
+        })?;
+        writer.write(rb).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Failed to write RecordBatch: {}",
+                e
+            ))
+        })?;
+        writer.finish().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Failed to finish IPC stream: {}",
+                e
+            ))
+        })?;
+    }
+
+    let pa = py.import("pyarrow")?;
+    let ipc_mod = pa.getattr("ipc")?;
+    let io = py.import("io")?;
+    let bytes_io = io.call_method1("BytesIO", (PyBytes::new(py, &buffer),))?;
+    let reader = ipc_mod.call_method1("open_stream", (&bytes_io,))?;
+    let table = reader.call_method0("read_all")?;
+    Ok(table.into())
+}
+
+/// Convert a Python pyarrow Table to a ggsql DataFrame via Arrow IPC serialization
+fn py_to_df(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
+    let pa = py.import("pyarrow")?;
+    let table = if obj.is_instance(&pa.getattr("Table")?)? {
+        obj.clone()
+    } else {
+        pa.call_method1("table", (obj,)).map_err(|e| {
+            let type_name = obj
+                .get_type()
+                .name()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| "<unknown>".to_string());
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+                "Expected a pyarrow.Table or compatible type, got {}: {}",
+                type_name, e
+            ))
+        })?
+    };
+
+    let ipc_mod = pa.getattr("ipc")?;
+    let io = py.import("io")?;
+    let sink = io.call_method0("BytesIO")?;
+    let writer = ipc_mod.call_method1("new_stream", (&sink, table.getattr("schema")?))?;
+    writer.call_method1("write_table", (&table,))?;
+    writer.call_method0("close")?;
+    sink.call_method1("seek", (0i64,))?;
+    let ipc_bytes: Vec<u8> = sink.call_method0("read")?.extract()?;
+
+    let cursor = Cursor::new(ipc_bytes);
+    let reader = StreamReader::try_new(cursor, None).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to read IPC stream: {}", e))
+    })?;
+
+    let batches: Vec<_> = reader
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Failed to serialize DataFrame: {}",
+                "Failed to read RecordBatch: {}",
                 e
             ))
         })?;
 
-    let io = py.import("io")?;
-    let bytes_io = io.call_method1("BytesIO", (PyBytes::new(py, &buffer),))?;
+    if batches.is_empty() {
+        return Ok(DataFrame::empty());
+    }
 
-    let polars = py.import("polars")?;
-    polars
-        .call_method1("read_ipc", (bytes_io,))
-        .map(|obj| obj.into())
-}
-
-/// Convert a Python polars DataFrame to a Rust Polars DataFrame via IPC serialization
-fn py_to_polars(py: Python<'_>, df: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
-    let io = py.import("io")?;
-    let bytes_io = io.call_method0("BytesIO")?;
-    df.call_method1("write_ipc", (&bytes_io,))?;
-    bytes_io.call_method1("seek", (0i64,))?;
-
-    let ipc_bytes: Vec<u8> = bytes_io.call_method0("read")?.extract()?;
-    let cursor = Cursor::new(ipc_bytes);
-
-    IpcReader::new(cursor).finish().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to read DataFrame: {}", e))
-    })
-}
-
-/// Convert a Python polars DataFrame to Rust DataFrame - for use inside Python::attach
-/// This variant is used by PyReaderBridge where we already hold the GIL.
-fn py_to_polars_inner(df: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
-    let py = df.py();
-    let io = py.import("io")?;
-    let bytes_io = io.call_method0("BytesIO")?;
-
-    df.call_method1("write_ipc", (&bytes_io,)).map_err(|_| {
-        PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-            "Reader.execute_sql() must return a polars.DataFrame",
-        )
+    let combined = arrow::compute::concat_batches(&batches[0].schema(), &batches).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to concat batches: {}", e))
     })?;
 
-    bytes_io.call_method1("seek", (0i64,))?;
-    let ipc_bytes: Vec<u8> = bytes_io.call_method0("read")?.extract()?;
-    let cursor = Cursor::new(ipc_bytes);
+    Ok(DataFrame::from_record_batch(combined))
+}
 
-    IpcReader::new(cursor).finish().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Failed to deserialize DataFrame: {}",
-            e
-        ))
-    })
+/// Convert a Python object to a ggsql DataFrame - for use inside Python::attach
+/// This variant is used by PyReaderBridge where we already hold the GIL.
+fn py_to_df_inner(obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
+    let py = obj.py();
+    py_to_df(py, obj)
 }
 
 /// Convert validation errors/warnings to a Python list of dicts
@@ -121,7 +157,7 @@ fn warnings_to_pylist(py: Python<'_>, warnings: &[ValidationWarning]) -> PyResul
 
 /// Bridges a Python reader object to the Rust Reader trait.
 ///
-/// This allows any Python object with an `execute_sql(sql: str) -> polars.DataFrame`
+/// This allows any Python object with an `execute_sql(sql: str) -> pyarrow.Table`
 /// method to be used as a ggsql reader.
 struct PyReaderBridge {
     obj: Py<PyAny>,
@@ -136,17 +172,16 @@ impl Reader for PyReaderBridge {
             let result = bound.call_method1("execute_sql", (sql,)).map_err(|e| {
                 GgsqlError::ReaderError(format!("Reader.execute_sql() failed: {}", e))
             })?;
-            py_to_polars_inner(&result).map_err(|e| GgsqlError::ReaderError(e.to_string()))
+            py_to_df_inner(&result).map_err(|e| GgsqlError::ReaderError(e.to_string()))
         })
     }
 
     fn register(&self, name: &str, df: DataFrame, replace: bool) -> ggsql::Result<()> {
         Python::attach(|py| {
-            let py_df =
-                polars_to_py(py, &df).map_err(|e| GgsqlError::ReaderError(e.to_string()))?;
+            let py_table = df_to_py(py, &df).map_err(|e| GgsqlError::ReaderError(e.to_string()))?;
             self.obj
                 .bind(py)
-                .call_method1("register", (name, py_df, replace))
+                .call_method1("register", (name, py_table, replace))
                 .map_err(|e| GgsqlError::ReaderError(format!("Reader.register() failed: {}", e)))?;
             Ok(())
         })
@@ -203,11 +238,11 @@ macro_rules! try_native_readers {
 /// Examples
 /// --------
 /// >>> reader = DuckDBReader("duckdb://memory")
-/// >>> df = reader.execute_sql("SELECT 1 as x, 2 as y")
+/// >>> table = reader.execute_sql("SELECT 1 as x, 2 as y")
 ///
 /// >>> reader = DuckDBReader("duckdb://memory")
-/// >>> reader.register("data", pl.DataFrame({"x": [1, 2, 3]}))
-/// >>> df = reader.execute_sql("SELECT * FROM data WHERE x > 1")
+/// >>> reader.register("data", pa.table({"x": [1, 2, 3]}))
+/// >>> table = reader.execute_sql("SELECT * FROM data WHERE x > 1")
 #[pyclass(name = "DuckDBReader", unsendable)]
 struct PyDuckDBReader {
     inner: RustDuckDBReader,
@@ -239,32 +274,32 @@ impl PyDuckDBReader {
         Ok(Self { inner })
     }
 
-    /// Register a DataFrame as a queryable table.
+    /// Register a pyarrow Table as a queryable table.
     ///
-    /// After registration, the DataFrame can be queried by name in SQL.
+    /// After registration, the table can be queried by name in SQL.
     ///
     /// Parameters
     /// ----------
     /// name : str
     ///     The table name to register under.
-    /// df : polars.DataFrame
-    ///     The DataFrame to register. Must be a polars DataFrame.
+    /// table : pyarrow.Table
+    ///     The Arrow table to register.
     ///
     /// Raises
     /// ------
     /// ValueError
     ///     If registration fails or the table name is invalid.
-    #[pyo3(signature = (name, df, replace=false))]
+    #[pyo3(signature = (name, table, replace=false))]
     fn register(
         &self,
         py: Python<'_>,
         name: &str,
-        df: &Bound<'_, PyAny>,
+        table: &Bound<'_, PyAny>,
         replace: bool,
     ) -> PyResult<()> {
-        let rust_df = py_to_polars(py, df)?;
+        let df = py_to_df(py, table)?;
         self.inner
-            .register(name, rust_df, replace)
+            .register(name, df, replace)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
     }
 
@@ -285,7 +320,7 @@ impl PyDuckDBReader {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
     }
 
-    /// Execute a SQL query and return the result as a DataFrame.
+    /// Execute a SQL query and return the result as a pyarrow Table.
     ///
     /// Parameters
     /// ----------
@@ -294,8 +329,8 @@ impl PyDuckDBReader {
     ///
     /// Returns
     /// -------
-    /// polars.DataFrame
-    ///     The query result as a polars DataFrame.
+    /// pyarrow.Table
+    ///     The query result as a pyarrow Table.
     ///
     /// Raises
     /// ------
@@ -306,7 +341,7 @@ impl PyDuckDBReader {
             .inner
             .execute_sql(sql)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-        polars_to_py(py, &df)
+        df_to_py(py, &df)
     }
 
     /// Execute a ggsql query and return the visualization specification.
@@ -559,12 +594,12 @@ impl PySpec {
     ///
     /// Returns
     /// -------
-    /// polars.DataFrame | None
-    ///     The main query result DataFrame, or None if not available.
+    /// pyarrow.Table | None
+    ///     The main query result as a pyarrow Table, or None if not available.
     fn data(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.inner
             .layer_data(0)
-            .map(|df| polars_to_py(py, df))
+            .map(|df| df_to_py(py, df))
             .transpose()
     }
 
@@ -577,12 +612,12 @@ impl PySpec {
     ///
     /// Returns
     /// -------
-    /// polars.DataFrame | None
-    ///     The layer-specific DataFrame, or None if the layer uses global data.
+    /// pyarrow.Table | None
+    ///     The layer-specific data as a pyarrow Table, or None if the layer uses global data.
     fn layer_data(&self, py: Python<'_>, index: usize) -> PyResult<Option<Py<PyAny>>> {
         self.inner
             .layer_data(index)
-            .map(|df| polars_to_py(py, df))
+            .map(|df| df_to_py(py, df))
             .transpose()
     }
 
@@ -595,12 +630,12 @@ impl PySpec {
     ///
     /// Returns
     /// -------
-    /// polars.DataFrame | None
-    ///     The stat transform DataFrame, or None if no stat transform.
+    /// pyarrow.Table | None
+    ///     The stat transform data as a pyarrow Table, or None if no stat transform.
     fn stat_data(&self, py: Python<'_>, index: usize) -> PyResult<Option<Py<PyAny>>> {
         self.inner
             .stat_data(index)
-            .map(|df| polars_to_py(py, df))
+            .map(|df| df_to_py(py, df))
             .transpose()
     }
 
@@ -710,7 +745,7 @@ fn validate(query: &str) -> PyResult<PyValidated> {
 /// reader : Reader | object
 ///     The database reader to execute SQL against. Can be a native Reader
 ///     for optimal performance, or any Python object with an
-///     `execute_sql(sql: str) -> polars.DataFrame` method.
+///     `execute_sql(sql: str) -> pyarrow.Table` method.
 ///
 /// Returns
 /// -------
@@ -732,8 +767,8 @@ fn validate(query: &str) -> PyResult<PyValidated> {
 ///
 /// >>> # Using custom Python reader
 /// >>> class MyReader:
-/// ...     def execute_sql(self, sql: str) -> pl.DataFrame:
-/// ...         return pl.DataFrame({"x": [1, 2, 3], "y": [10, 20, 30]})
+/// ...     def execute_sql(self, sql: str) -> pa.Table:
+/// ...         return pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
 /// >>> reader = MyReader()
 /// >>> spec = execute("SELECT * FROM data VISUALISE x, y DRAW point", reader)
 #[pyfunction]
