@@ -13,7 +13,9 @@ use ggsql::dataframe::DataFrame;
 use ggsql::reader::Spec;
 use ggsql::reader::{DuckDBReader as RustDuckDBReader, Reader};
 use ggsql::validate::{validate as rust_validate, ValidationWarning};
-use ggsql::writer::{VegaLiteWriter as RustVegaLiteWriter, Writer as RustWriter};
+use ggsql::writer::{
+    SvgWriter as RustSvgWriter, VegaLiteWriter as RustVegaLiteWriter, Writer as RustWriter,
+};
 use ggsql::GgsqlError;
 
 // ============================================================================
@@ -443,6 +445,72 @@ impl PyVegaLiteWriter {
 }
 
 // ============================================================================
+// PySVGWriter
+// ============================================================================
+
+/// SVG output writer (native hephaestus renderer).
+///
+/// Renders visualization specifications to SVG markup without any
+/// JavaScript round-trip.
+///
+/// Examples
+/// --------
+/// >>> writer = SVGWriter(width=600, height=400, dpi=96)
+/// >>> spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+/// >>> svg = writer.render(spec)
+#[pyclass(name = "SVGWriter")]
+struct PySVGWriter {
+    inner: RustSvgWriter,
+}
+
+#[pymethods]
+impl PySVGWriter {
+    /// Create a new SVG writer.
+    ///
+    /// Parameters
+    /// ----------
+    /// width : int
+    ///     Canvas width in pixels.
+    /// height : int
+    ///     Canvas height in pixels.
+    /// dpi : float
+    ///     Canvas resolution in dots per inch.
+    ///
+    /// Returns
+    /// -------
+    /// SVGWriter
+    ///     A configured SVG writer instance.
+    #[new]
+    fn new(width: u32, height: u32, dpi: f64) -> Self {
+        Self {
+            inner: RustSvgWriter::new(width.max(1), height.max(1), dpi),
+        }
+    }
+
+    /// Render a Spec to SVG markup.
+    ///
+    /// Parameters
+    /// ----------
+    /// spec : Spec
+    ///     The visualization specification from reader.execute().
+    ///
+    /// Returns
+    /// -------
+    /// tuple[str, list[str]]
+    ///     The SVG markup and a list of render warnings (usually empty).
+    ///
+    /// Raises
+    /// ------
+    /// ValueError
+    ///     If rendering fails.
+    fn render(&self, spec: &PySpec) -> PyResult<(String, Vec<String>)> {
+        self.inner
+            .render_reporting(&spec.inner)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    }
+}
+
+// ============================================================================
 // PyValidated
 // ============================================================================
 
@@ -795,6 +863,7 @@ fn execute(query: &str, reader: &Bound<'_, PyAny>) -> PyResult<PySpec> {
 fn _ggsql(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Classes
     m.add_class::<PyDuckDBReader>()?;
+    m.add_class::<PySVGWriter>()?;
     m.add_class::<PyVegaLiteWriter>()?;
     m.add_class::<PyValidated>()?;
     m.add_class::<PySpec>()?;

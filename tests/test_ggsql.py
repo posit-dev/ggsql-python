@@ -704,3 +704,23 @@ class TestVegaLiteWriterRenderChart:
             assert chart_dict["height"] == raw_spec["height"]
         if "width" in raw_spec:
             assert chart_dict["width"] == raw_spec["width"]
+
+
+class TestSVGWriter:
+    def test_create_writer(self):
+        writer = ggsql.SVGWriter()
+        assert writer is not None
+
+    def test_render_to_svg(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        svg = ggsql.SVGWriter().render(spec)
+        assert isinstance(svg, str)
+        assert "<svg" in svg
+
+    def test_render_with_dimensions(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        svg = ggsql.SVGWriter(width=400, height=300, dpi=96).render(spec)
+        assert isinstance(svg, str)
+        assert "<svg" in svg

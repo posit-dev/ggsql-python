@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from typing import Any, Union
 
 import altair
@@ -9,6 +10,7 @@ from narwhals.typing import IntoFrame
 
 from ggsql._ggsql import (
     DuckDBReader,
+    SVGWriter as _RustSVGWriter,
     VegaLiteWriter as _RustVegaLiteWriter,
     Validated,
     Spec,
@@ -18,13 +20,14 @@ from ggsql._ggsql import (
 
 # PyO3 classes default to __module__ = "builtins"; point them at their real
 # home so docs tooling (great-docs/griffe) can locate them.
-for _cls in (DuckDBReader, _RustVegaLiteWriter, Validated, Spec):
+for _cls in (DuckDBReader, _RustSVGWriter, _RustVegaLiteWriter, Validated, Spec):
     _cls.__module__ = "ggsql._ggsql"
 del _cls
 
 __all__ = [
     # Classes
     "DuckDBReader",
+    "SVGWriter",
     "VegaLiteWriter",
     "Validated",
     "Spec",
@@ -45,6 +48,15 @@ AltairChart = Union[
     altair.VConcatChart,
     altair.RepeatChart,
 ]
+
+
+def _warn_render_issues(issues: list[str]) -> None:
+    """Surface writer render warnings (from Rust's render_reporting) to the user."""
+    if not issues:
+        return
+    message = f"ggsql writer reported {len(issues)} issue(s) while rendering:"
+    message += "\n" + "\n".join(f"  - {issue}" for issue in issues)
+    warnings.warn(message, UserWarning, stacklevel=3)
 
 
 def _json_to_altair_chart(vegalite_json: str, **kwargs: Any) -> AltairChart:
@@ -73,6 +85,38 @@ def _json_to_altair_chart(vegalite_json: str, **kwargs: Any) -> AltairChart:
             pass
 
     return altair.Chart.from_json(vegalite_json, **kwargs)
+
+
+class SVGWriter:
+    """SVG output writer using ggsql's native renderer.
+
+    Parameters
+    ----------
+    width
+        Canvas width in pixels.
+    height
+        Canvas height in pixels.
+    dpi
+        Canvas resolution in dots per inch.
+
+    Methods
+    -------
+    render(spec)
+        Render a Spec to an SVG string.
+    """
+
+    def __init__(self, width: int = 600, height: int = 400, dpi: float = 96.0) -> None:
+        self._inner = _RustSVGWriter(width, height, dpi)
+
+    def render(self, spec: Spec) -> str:
+        """Render a Spec to an SVG string.
+
+        Render warnings reported by the writer are surfaced via
+        ``warnings.warn()``.
+        """
+        output, issues = self._inner.render(spec)
+        _warn_render_issues(issues)
+        return output
 
 
 class VegaLiteWriter:
