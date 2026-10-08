@@ -10,6 +10,8 @@ from narwhals.typing import IntoFrame
 
 from ggsql._ggsql import (
     DuckDBReader,
+    HepWriter as _RustHepWriter,
+    PDFWriter as _RustPDFWriter,
     SVGWriter as _RustSVGWriter,
     VegaLiteWriter as _RustVegaLiteWriter,
     Validated,
@@ -20,7 +22,15 @@ from ggsql._ggsql import (
 
 # PyO3 classes default to __module__ = "builtins"; point them at their real
 # home so docs tooling (great-docs/griffe) can locate them.
-for _cls in (DuckDBReader, _RustSVGWriter, _RustVegaLiteWriter, Validated, Spec):
+for _cls in (
+    DuckDBReader,
+    _RustHepWriter,
+    _RustPDFWriter,
+    _RustSVGWriter,
+    _RustVegaLiteWriter,
+    Validated,
+    Spec,
+):
     _cls.__module__ = "ggsql._ggsql"
 del _cls
 
@@ -28,6 +38,8 @@ __all__ = [
     # Classes
     "DuckDBReader",
     "SVGWriter",
+    "PDFWriter",
+    "HepWriter",
     "VegaLiteWriter",
     "Validated",
     "Spec",
@@ -110,6 +122,64 @@ class SVGWriter:
 
     def render(self, spec: Spec) -> str:
         """Render a Spec to an SVG string.
+
+        Render warnings reported by the writer are surfaced via
+        ``warnings.warn()``.
+        """
+        output, issues = self._inner.render(spec)
+        _warn_render_issues(issues)
+        return output
+
+
+class PDFWriter:
+    """PDF output writer using ggsql's native renderer.
+
+    Parameters
+    ----------
+    width
+        Canvas width in pixels.
+    height
+        Canvas height in pixels.
+    dpi
+        Canvas resolution in dots per inch.
+
+    Methods
+    -------
+    render(spec)
+        Render a Spec to a PDF document (bytes).
+    """
+
+    def __init__(self, width: int = 600, height: int = 400, dpi: float = 96.0) -> None:
+        self._inner = _RustPDFWriter(width, height, dpi)
+
+    def render(self, spec: Spec) -> bytes:
+        """Render a Spec to a PDF document as bytes.
+
+        Render warnings reported by the writer are surfaced via
+        ``warnings.warn()``.
+        """
+        output, issues = self._inner.render(spec)
+        _warn_render_issues(issues)
+        return output
+
+
+class HepWriter:
+    """.hep plot document writer using ggsql's native renderer.
+
+    A `.hep` document is a self-contained description of the resolved plot
+    that a compatible consumer can render and re-layout at any size.
+
+    Methods
+    -------
+    render(spec)
+        Render a Spec to a .hep plot document (bytes).
+    """
+
+    def __init__(self) -> None:
+        self._inner = _RustHepWriter()
+
+    def render(self, spec: Spec) -> bytes:
+        """Render a Spec to a .hep plot document as bytes.
 
         Render warnings reported by the writer are surfaced via
         ``warnings.warn()``.

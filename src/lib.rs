@@ -14,7 +14,8 @@ use ggsql::reader::Spec;
 use ggsql::reader::{DuckDBReader as RustDuckDBReader, Reader};
 use ggsql::validate::{validate as rust_validate, ValidationWarning};
 use ggsql::writer::{
-    SvgWriter as RustSvgWriter, VegaLiteWriter as RustVegaLiteWriter, Writer as RustWriter,
+    HepWriter as RustHepWriter, PdfWriter as RustPdfWriter, SvgWriter as RustSvgWriter,
+    VegaLiteWriter as RustVegaLiteWriter, Writer as RustWriter,
 };
 use ggsql::GgsqlError;
 
@@ -511,6 +512,135 @@ impl PySVGWriter {
 }
 
 // ============================================================================
+// PyPDFWriter
+// ============================================================================
+
+/// PDF output writer (native hephaestus renderer).
+///
+/// Renders visualization specifications to PDF documents.
+///
+/// Examples
+/// --------
+/// >>> writer = PDFWriter(width=600, height=400, dpi=96)
+/// >>> spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+/// >>> pdf_bytes = writer.render(spec)
+#[pyclass(name = "PDFWriter")]
+struct PyPDFWriter {
+    inner: RustPdfWriter,
+}
+
+#[pymethods]
+impl PyPDFWriter {
+    /// Create a new PDF writer.
+    ///
+    /// Parameters
+    /// ----------
+    /// width : int
+    ///     Canvas width in pixels.
+    /// height : int
+    ///     Canvas height in pixels.
+    /// dpi : float
+    ///     Canvas resolution in dots per inch.
+    ///
+    /// Returns
+    /// -------
+    /// PDFWriter
+    ///     A configured PDF writer instance.
+    #[new]
+    fn new(width: u32, height: u32, dpi: f64) -> Self {
+        Self {
+            inner: RustPdfWriter::new(width.max(1), height.max(1), dpi),
+        }
+    }
+
+    /// Render a Spec to a PDF document.
+    ///
+    /// Parameters
+    /// ----------
+    /// spec : Spec
+    ///     The visualization specification from reader.execute().
+    ///
+    /// Returns
+    /// -------
+    /// tuple[bytes, list[str]]
+    ///     The PDF document as bytes and a list of render warnings
+    ///     (usually empty).
+    ///
+    /// Raises
+    /// ------
+    /// ValueError
+    ///     If rendering fails.
+    fn render(&self, py: Python<'_>, spec: &PySpec) -> PyResult<(Py<PyBytes>, Vec<String>)> {
+        let (bytes, warnings) = self
+            .inner
+            .render_reporting(&spec.inner)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+        Ok((PyBytes::new(py, &bytes).unbind(), warnings))
+    }
+}
+
+// ============================================================================
+// PyHepWriter
+// ============================================================================
+
+/// .hep plot document writer (native hephaestus renderer).
+///
+/// Renders visualization specifications to `.hep` plot documents — a
+/// self-contained description of the resolved plot that a compatible
+/// consumer can render and re-layout at any size.
+///
+/// Examples
+/// --------
+/// >>> writer = HepWriter()
+/// >>> spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+/// >>> doc_bytes = writer.render(spec)
+#[pyclass(name = "HepWriter")]
+struct PyHepWriter {
+    inner: RustHepWriter,
+}
+
+#[pymethods]
+impl PyHepWriter {
+    /// Create a new .hep writer.
+    ///
+    /// Returns
+    /// -------
+    /// HepWriter
+    ///     A configured .hep writer instance.
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: RustHepWriter::default(),
+        }
+    }
+
+    /// Render a Spec to a .hep plot document.
+    ///
+    /// Parameters
+    /// ----------
+    /// spec : Spec
+    ///     The visualization specification from reader.execute().
+    ///
+    /// Returns
+    /// -------
+    /// tuple[bytes, list[str]]
+    ///     The .hep document as bytes and a list of render warnings
+    ///     (usually empty).
+    ///
+    /// Raises
+    /// ------
+    /// ValueError
+    ///     If rendering fails.
+    fn render(&self, py: Python<'_>, spec: &PySpec) -> PyResult<(Py<PyBytes>, Vec<String>)> {
+        let (bytes, warnings) = self
+            .inner
+            .render_reporting(&spec.inner)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+        Ok((PyBytes::new(py, &bytes).unbind(), warnings))
+    }
+}
+
+// ============================================================================
 // PyValidated
 // ============================================================================
 
@@ -864,6 +994,8 @@ fn _ggsql(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Classes
     m.add_class::<PyDuckDBReader>()?;
     m.add_class::<PySVGWriter>()?;
+    m.add_class::<PyPDFWriter>()?;
+    m.add_class::<PyHepWriter>()?;
     m.add_class::<PyVegaLiteWriter>()?;
     m.add_class::<PyValidated>()?;
     m.add_class::<PySpec>()?;

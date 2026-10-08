@@ -724,3 +724,36 @@ class TestSVGWriter:
         svg = ggsql.SVGWriter(width=400, height=300, dpi=96).render(spec)
         assert isinstance(svg, str)
         assert "<svg" in svg
+
+
+class TestPDFWriter:
+    def test_create_writer(self):
+        writer = ggsql.PDFWriter()
+        assert writer is not None
+
+    def test_render_to_pdf(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        pdf = ggsql.PDFWriter().render(spec)
+        assert isinstance(pdf, bytes)
+        assert pdf.startswith(b"%PDF")
+
+    def test_render_with_dimensions(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        pdf = ggsql.PDFWriter(width=400, height=300, dpi=96).render(spec)
+        assert isinstance(pdf, bytes)
+        assert pdf.startswith(b"%PDF")
+
+
+class TestHepWriter:
+    def test_create_writer(self):
+        writer = ggsql.HepWriter()
+        assert writer is not None
+
+    def test_render_to_hep(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        doc = ggsql.HepWriter().render(spec)
+        assert isinstance(doc, bytes)
+        assert len(doc) > 0
