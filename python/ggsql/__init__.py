@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import warnings
+from pathlib import Path
 from typing import Any, Union
 
 import altair
@@ -47,6 +48,7 @@ __all__ = [
     "validate",
     "execute",
     "render_altair",
+    "save",
 ]
 __version__ = "0.5.2"
 
@@ -247,6 +249,61 @@ class VegaLiteWriter:
                 spec_dict["width"] = width
             vegalite_json = json.dumps(spec_dict)
         return _json_to_altair_chart(vegalite_json, validate=validate, **kwargs)
+
+
+def save(
+    spec: Spec,
+    file: str | Path,
+    *,
+    width: int = 600,
+    height: int = 400,
+    dpi: float = 96.0,
+) -> Path:
+    """Save a ggsql spec to a file.
+
+    The format is derived from the file extension: `.svg`, `.pdf`, and
+    `.hep` are written by the corresponding native writer, and `.json`
+    writes the Vega-Lite representation.
+
+    Parameters
+    ----------
+    spec
+        The resolved visualization specification from ``reader.execute()``.
+    file
+        Output file path. Extension determines format: `.svg`, `.pdf`,
+        `.hep`, or `.json`.
+    width
+        Canvas width in pixels (ignored for `.hep` and `.json`).
+    height
+        Canvas height in pixels (ignored for `.hep` and `.json`).
+    dpi
+        Canvas resolution in dots per inch (ignored for `.hep` and `.json`).
+
+    Returns
+    -------
+    Path
+        The path that was written.
+
+    Raises
+    ------
+    ValueError
+        If the file extension is not supported.
+    """
+    path = Path(file)
+    ext = path.suffix.lower()
+    if ext == ".svg":
+        path.write_text(SVGWriter(width, height, dpi).render(spec), encoding="utf-8")
+    elif ext == ".pdf":
+        path.write_bytes(PDFWriter(width, height, dpi).render(spec))
+    elif ext == ".hep":
+        path.write_bytes(HepWriter().render(spec))
+    elif ext == ".json":
+        path.write_text(VegaLiteWriter().render(spec), encoding="utf-8")
+    else:
+        raise ValueError(
+            f"Unsupported file extension {ext!r}. Use .svg, .pdf, .hep, or .json."
+        )
+    return path
 
 
 def render_altair(

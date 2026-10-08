@@ -757,3 +757,40 @@ class TestHepWriter:
         doc = ggsql.HepWriter().render(spec)
         assert isinstance(doc, bytes)
         assert len(doc) > 0
+
+
+class TestSave:
+    @pytest.fixture
+    def spec(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        return reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+
+    def test_save_svg(self, spec, tmp_path):
+        out = tmp_path / "plot.svg"
+        ggsql.save(spec, out)
+        assert "<svg" in out.read_text()
+
+    def test_save_pdf(self, spec, tmp_path):
+        out = tmp_path / "plot.pdf"
+        ggsql.save(spec, out)
+        assert out.read_bytes().startswith(b"%PDF")
+
+    def test_save_hep(self, spec, tmp_path):
+        out = tmp_path / "plot.hep"
+        ggsql.save(spec, out)
+        assert len(out.read_bytes()) > 0
+
+    def test_save_json(self, spec, tmp_path):
+        out = tmp_path / "plot.json"
+        ggsql.save(spec, out)
+        spec_dict = json.loads(out.read_text())
+        assert "$schema" in spec_dict or "mark" in spec_dict
+
+    def test_save_with_dimensions(self, spec, tmp_path):
+        out = tmp_path / "plot.svg"
+        ggsql.save(spec, out, width=400, height=300, dpi=96)
+        assert "<svg" in out.read_text()
+
+    def test_save_unknown_extension_raises(self, spec, tmp_path):
+        with pytest.raises(ValueError, match="Unsupported file extension"):
+            ggsql.save(spec, tmp_path / "plot.png")
