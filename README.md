@@ -110,6 +110,29 @@ vegalite_json = writer.render(spec)
 print(vegalite_json)
 ```
 
+### Native Writers (SVG, PDF, HEP)
+
+In addition to Vega-Lite/Altair output, ggsql can render plots natively to
+SVG, PDF, and `.hep` plot documents — no JavaScript required:
+
+```python
+import ggsql
+
+reader = ggsql.DuckDBReader("duckdb://memory")
+spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+
+# Render with a specific writer
+svg = ggsql.SVGWriter(width=600, height=400, dpi=96).render(spec)  # str
+pdf = ggsql.PDFWriter(width=600, height=400, dpi=96).render(spec)  # bytes
+doc = ggsql.HepWriter().render(spec)                               # bytes
+
+# Or save directly — the format is picked from the file extension
+ggsql.save(spec, "plot.svg")
+ggsql.save(spec, "plot.pdf")
+ggsql.save(spec, "plot.hep")
+ggsql.save(spec, "plot.json")  # Vega-Lite JSON
+```
+
 ## API Reference
 
 ### Classes
@@ -137,6 +160,25 @@ Writer that generates Vega-Lite v6 JSON specifications.
 writer = ggsql.VegaLiteWriter()
 json_output = writer.render(spec)
 ```
+
+#### `SVGWriter(width: int = 600, height: int = 400, dpi: float = 96.0)`
+
+Renders specs to SVG markup using ggsql's native renderer.
+
+- `render(spec: Spec) -> str` — Render to an SVG string.
+
+#### `PDFWriter(width: int = 600, height: int = 400, dpi: float = 96.0)`
+
+Renders specs to PDF documents using ggsql's native renderer.
+
+- `render(spec: Spec) -> bytes` — Render to a PDF document.
+
+#### `HepWriter()`
+
+Renders specs to `.hep` plot documents (self-contained plot descriptions a
+compatible consumer can re-layout at any size) using ggsql's native renderer.
+
+- `render(spec: Spec) -> bytes` — Render to a `.hep` document.
 
 #### `Validated`
 
@@ -211,6 +253,11 @@ import ggsql
 table = pa.table({"x": [1, 2, 3], "y": [10, 20, 30]})
 chart = ggsql.render_altair(table, "VISUALISE x, y DRAW point")
 ```
+
+#### `save(spec, file, *, width=600, height=400, dpi=96) -> Path`
+
+Save a spec to a file. The extension picks the format: `.svg`, `.pdf`,
+`.hep` (native writers) or `.json` (Vega-Lite).
 
 ## Examples
 
