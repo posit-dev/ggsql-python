@@ -529,7 +529,7 @@ wheels = [
 
 [[package]]
 name = "ggsql"
-version = "0.3.3"
+version = "0.5.2"
 source = { editable = "." }
 dependencies = [
     { name = "altair" },

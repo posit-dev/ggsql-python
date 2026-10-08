@@ -59,14 +59,15 @@ class TestValidate:
         assert len(validated.errors()) > 0
 
     def test_missing_required_aesthetic(self):
-        # Point requires x and y, only providing x
+        # Text requires label, not providing it
+        # (point's position aesthetics became optional in ggsql 0.4.0)
         validated = ggsql.validate(
-            "SELECT 1 AS x, 2 AS y VISUALISE DRAW point MAPPING x AS x"
+            "SELECT 1 AS x, 2 AS y VISUALISE DRAW text MAPPING x AS x"
         )
         assert not validated.valid()
         errors = validated.errors()
         assert len(errors) > 0
-        assert any("y" in e["message"] for e in errors)
+        assert any("label" in e["message"] for e in errors)
 
 
 class TestDuckDBReader:
