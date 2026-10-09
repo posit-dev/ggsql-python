@@ -38,6 +38,10 @@ To pick up a new version of the upstream `ggsql` Rust crate, bump its version in
 
 **Key design pattern**: Two-stage API — `reader.execute(query) -> Spec`, then `writer.render(spec) -> str` or `writer.render_chart(spec) -> AltairChart`. The `render_altair()` shortcut collapses both stages.
 
+## Releasing
+
+The Python Release workflow (`.github/workflows/release-python.yml`) triggers on tags matching `py/v*`. When creating a GitHub release, use `gh release create py/vX.Y.Z` — a plain `vX.Y.Z` tag won't trigger the build/publish pipeline.
+
 ## `.cargo/config.toml`
 
 Sets `GGSQL_SKIP_GENERATE=1` so tree-sitter uses its pre-generated parser rather than regenerating from `grammar.js`. Don't remove this.
