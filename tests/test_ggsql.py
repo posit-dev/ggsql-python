@@ -794,3 +794,39 @@ class TestSave:
     def test_save_unknown_extension_raises(self, spec, tmp_path):
         with pytest.raises(ValueError, match="Unsupported file extension"):
             ggsql.save(spec, tmp_path / "plot.png")
+
+    def test_save_invalid_dpi_raises(self, spec, tmp_path):
+        with pytest.raises(ValueError, match="dpi must be a positive"):
+            ggsql.save(spec, tmp_path / "plot.svg", dpi=0)
+
+
+class TestWriterDpiValidation:
+    @pytest.mark.parametrize("bad_dpi", [0, -1, -96.0, float("nan"), float("inf")])
+    def test_svg_writer_rejects_invalid_dpi(self, bad_dpi):
+        with pytest.raises(ValueError, match="dpi must be a positive"):
+            ggsql.SVGWriter(dpi=bad_dpi)
+
+    @pytest.mark.parametrize("bad_dpi", [0, -1, -96.0, float("nan"), float("inf")])
+    def test_pdf_writer_rejects_invalid_dpi(self, bad_dpi):
+        with pytest.raises(ValueError, match="dpi must be a positive"):
+            ggsql.PDFWriter(dpi=bad_dpi)
+
+
+class TestBuiltinData:
+    """Integration coverage for builtin datasets (ggsql:... relations)."""
+
+    def test_execute_builtin_dataset(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute(
+            "SELECT * FROM ggsql:penguins "
+            "VISUALISE DRAW point MAPPING bill_len AS x, bill_dep AS y"
+        )
+        assert spec is not None
+
+    def test_builtin_dataset_renders_svg(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute(
+            "VISUALISE FROM ggsql:airquality DRAW point MAPPING Temp AS x, Ozone AS y"
+        )
+        svg = ggsql.SVGWriter().render(spec)
+        assert "<svg" in svg

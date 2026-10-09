@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import warnings
 from pathlib import Path
 from typing import Any, Union
@@ -101,6 +102,12 @@ def _json_to_altair_chart(vegalite_json: str, **kwargs: Any) -> AltairChart:
     return altair.Chart.from_json(vegalite_json, **kwargs)
 
 
+def _validate_dpi(dpi: float) -> None:
+    """Reject non-positive or non-finite DPI before reaching the renderer."""
+    if not math.isfinite(dpi) or dpi <= 0:
+        raise ValueError(f"dpi must be a positive, finite number, got {dpi!r}")
+
+
 class SVGWriter:
     """SVG output writer using ggsql's native renderer.
 
@@ -120,6 +127,7 @@ class SVGWriter:
     """
 
     def __init__(self, width: int = 600, height: int = 400, dpi: float = 96.0) -> None:
+        _validate_dpi(dpi)
         self._inner = _RustSVGWriter(width, height, dpi)
 
     def render(self, spec: Spec) -> str:
@@ -152,6 +160,7 @@ class PDFWriter:
     """
 
     def __init__(self, width: int = 600, height: int = 400, dpi: float = 96.0) -> None:
+        _validate_dpi(dpi)
         self._inner = _RustPDFWriter(width, height, dpi)
 
     def render(self, spec: Spec) -> bytes:

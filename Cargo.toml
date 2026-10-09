@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/posit-dev/ggsql-python"
 homepage = "https://ggsql.org"
 description = "Python bindings for ggsql"
-rust-version = "1.86"
+rust-version = "1.88"
 
 [lib]
 name = "_ggsql"

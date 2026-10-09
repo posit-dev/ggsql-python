@@ -12,6 +12,7 @@
 
 - Upgraded to ggsql Rust crate v0.5.2 (from v0.3.3). See the [crate changelog](https://github.com/posit-dev/ggsql/blob/main/CHANGELOG.md) for the many language and rendering improvements in 0.4.0–0.5.2.
 - Upgraded the Arrow dependency from v56 to v58.
+- Declared Rust MSRV is now 1.88 (required by the native-writer dependency graph, e.g. parley 0.9).
 - `VegaLiteWriter.render_chart()` and `render_altair()` now accept `validate`, `height`, and `width` as explicit keyword arguments. `height` and `width` default to `None`, which preserves whatever dimensions ggsql produces. `validate` defaults to `False` (same behavior as before, now a named parameter).
 
 ## 0.3.2
