@@ -9,6 +9,8 @@ Rust logic (parsing, Vega-Lite generation) is tested in the Rust test suite.
 """
 
 import json
+import re
+from pathlib import Path
 
 import duckdb
 import pyarrow as pa
@@ -800,6 +802,14 @@ class TestSave:
             ggsql.save(spec, tmp_path / "plot.svg", dpi=0)
 
 
+class TestVersion:
+    def test_version_matches_pyproject(self):
+        pyproject = Path(__file__).parent.parent / "pyproject.toml"
+        match = re.search(r'^version = "([^"]+)"', pyproject.read_text(), re.M)
+        assert match is not None
+        assert ggsql.__version__ == match.group(1)
+
+
 class TestWriterDpiValidation:
     @pytest.mark.parametrize("bad_dpi", [0, -1, -96.0, float("nan"), float("inf")])
     def test_svg_writer_rejects_invalid_dpi(self, bad_dpi):
@@ -810,6 +820,26 @@ class TestWriterDpiValidation:
     def test_pdf_writer_rejects_invalid_dpi(self, bad_dpi):
         with pytest.raises(ValueError, match="dpi must be a positive"):
             ggsql.PDFWriter(dpi=bad_dpi)
+
+
+class TestWriterDimensionValidation:
+    @pytest.mark.parametrize("writer", [ggsql.SVGWriter, ggsql.PDFWriter])
+    @pytest.mark.parametrize("bad_width", [0, -1, -600])
+    def test_rejects_nonpositive_width(self, writer, bad_width):
+        with pytest.raises(ValueError, match="width must be a positive"):
+            writer(width=bad_width)
+
+    @pytest.mark.parametrize("writer", [ggsql.SVGWriter, ggsql.PDFWriter])
+    @pytest.mark.parametrize("bad_height", [0, -1, -400])
+    def test_rejects_nonpositive_height(self, writer, bad_height):
+        with pytest.raises(ValueError, match="height must be a positive"):
+            writer(height=bad_height)
+
+    def test_save_rejects_nonpositive_dimensions(self, tmp_path):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        with pytest.raises(ValueError, match="width must be a positive"):
+            ggsql.save(spec, tmp_path / "plot.svg", width=0)
 
 
 class TestBuiltinData:

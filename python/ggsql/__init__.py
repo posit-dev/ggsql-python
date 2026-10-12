@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import math
 import warnings
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _package_version
 from pathlib import Path
 from typing import Any, Union
 
@@ -51,7 +53,11 @@ __all__ = [
     "render_altair",
     "save",
 ]
-__version__ = "0.5.2"
+
+try:
+    __version__ = _package_version("ggsql")
+except PackageNotFoundError:  # not installed (e.g., running from a source tree)
+    __version__ = "0.0.0"
 
 # Type alias for any Altair chart type
 AltairChart = Union[
@@ -108,6 +114,12 @@ def _validate_dpi(dpi: float) -> None:
         raise ValueError(f"dpi must be a positive, finite number, got {dpi!r}")
 
 
+def _validate_dimension(name: str, value: int) -> None:
+    """Reject non-positive canvas dimensions before reaching the renderer."""
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}")
+
+
 class SVGWriter:
     """SVG output writer using ggsql's native renderer.
 
@@ -127,6 +139,8 @@ class SVGWriter:
     """
 
     def __init__(self, width: int = 600, height: int = 400, dpi: float = 96.0) -> None:
+        _validate_dimension("width", width)
+        _validate_dimension("height", height)
         _validate_dpi(dpi)
         self._inner = _RustSVGWriter(width, height, dpi)
 
@@ -160,6 +174,8 @@ class PDFWriter:
     """
 
     def __init__(self, width: int = 600, height: int = 400, dpi: float = 96.0) -> None:
+        _validate_dimension("width", width)
+        _validate_dimension("height", height)
         _validate_dpi(dpi)
         self._inner = _RustPDFWriter(width, height, dpi)
 
