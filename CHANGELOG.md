@@ -7,6 +7,7 @@
 - New native writers `SVGWriter`, `PDFWriter`, and `HepWriter`, rendered directly by ggsql (via hephaestus) with no JavaScript round-trip. Each exposes `render(spec)` returning `str` (SVG) or `bytes` (PDF/HEP); render warnings are surfaced via `warnings.warn()`.
 - New `ggsql.save(spec, file, ...)` helper that writes a spec to disk, picking the writer from the file extension (`.svg`, `.pdf`, `.hep`, or `.json` for Vega-Lite).
 - Enabled the crate's `builtin-data` feature, making builtin datasets such as `ggsql:world` available.
+- New `ggsql.CachingReader` that caches query results to avoid redundant source reads. Wraps a `duckdb://` connection string or any custom Python reader; reads are memoized with a configurable TTL and size budget, and derived `__ggsql_*` tables run on a private in-memory DuckDB cache.
 
 ### Changed
 
