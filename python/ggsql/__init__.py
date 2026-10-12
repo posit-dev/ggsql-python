@@ -312,7 +312,9 @@ def save(
     Raises
     ------
     ValueError
-        If the file extension is not supported.
+        If the file extension is not supported. Raster extensions (`.png`,
+        `.jpg`, `.tif`, `.webp`) raise with a suggestion to save as `.svg`
+        and convert, since ggsql's raster writers need a GPU adapter.
     """
     path = Path(file)
     ext = path.suffix.lower()
@@ -324,6 +326,13 @@ def save(
         path.write_bytes(HepWriter().render(spec))
     elif ext == ".json":
         path.write_text(VegaLiteWriter().render(spec), encoding="utf-8")
+    elif ext in (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"):
+        raise ValueError(
+            f"Raster output ({ext!r}) is not supported: ggsql's raster writers "
+            "require a GPU adapter, which is not available in every environment. "
+            "Save as .svg (or .pdf) and convert with a tool of your choice "
+            "(e.g. ImageMagick, rsvg-convert, or a browser)."
+        )
     else:
         raise ValueError(
             f"Unsupported file extension {ext!r}. Use .svg, .pdf, .hep, or .json."

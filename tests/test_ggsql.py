@@ -796,7 +796,14 @@ class TestSave:
 
     def test_save_unknown_extension_raises(self, spec, tmp_path):
         with pytest.raises(ValueError, match="Unsupported file extension"):
-            ggsql.save(spec, tmp_path / "plot.png")
+            ggsql.save(spec, tmp_path / "plot.xyz")
+
+    @pytest.mark.parametrize(
+        "ext", [".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"]
+    )
+    def test_save_raster_extension_suggests_svg(self, spec, tmp_path, ext):
+        with pytest.raises(ValueError, match=r"Save as \.svg"):
+            ggsql.save(spec, tmp_path / f"plot{ext}")
 
     def test_save_invalid_dpi_raises(self, spec, tmp_path):
         with pytest.raises(ValueError, match="dpi must be a positive"):
