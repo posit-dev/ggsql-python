@@ -10,8 +10,8 @@ use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 
 use ggsql::dataframe::DataFrame;
-use ggsql::reader::Spec;
 use ggsql::reader::cache::{CacheConfig, CacheConfigOverride};
+use ggsql::reader::Spec;
 use ggsql::reader::{CachingReader as RustCachingReader, DuckDBReader as RustDuckDBReader, Reader};
 use ggsql::validate::{validate as rust_validate, ValidationWarning};
 use ggsql::writer::{
@@ -451,34 +451,35 @@ impl PyCachingReader {
         let cache = RustDuckDBReader::from_connection_string("duckdb://memory")
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
 
-        let (primary_reader, primary_uri): (Box<dyn Reader + Send>, String) =
-            if let Ok(uri) = primary.extract::<&str>() {
-                if !uri.starts_with("duckdb://") {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+        let (primary_reader, primary_uri): (Box<dyn Reader + Send>, String) = if let Ok(uri) =
+            primary.extract::<&str>()
+        {
+            if !uri.starts_with("duckdb://") {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                         "Unsupported connection string {uri:?}: only duckdb:// primaries are currently supported"
                     )));
-                }
-                let reader = RustDuckDBReader::from_connection_string(uri)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-                (Box::new(reader), uri.to_string())
-            } else {
-                // Moving the inner reader out of a live pyclass isn't
-                // possible; guide the user to the connection-string form.
-                if primary.downcast::<PyDuckDBReader>().is_ok() {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            }
+            let reader = RustDuckDBReader::from_connection_string(uri)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+            (Box::new(reader), uri.to_string())
+        } else {
+            // Moving the inner reader out of a live pyclass isn't
+            // possible; guide the user to the connection-string form.
+            if primary.downcast::<PyDuckDBReader>().is_ok() {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                         "CachingReader cannot wrap an existing DuckDBReader; pass its connection string instead (e.g. CachingReader(\"duckdb://memory\"))",
                     ));
-                }
-                // The URI only feeds cache-key derivation, which just needs a
-                // stable-per-instance string; the type name suffices.
-                let type_name = primary.get_type().name()?.to_str()?.to_string();
-                (
-                    Box::new(PyReaderBridge {
-                        obj: primary.clone().unbind(),
-                    }),
-                    type_name,
-                )
-            };
+            }
+            // The URI only feeds cache-key derivation, which just needs a
+            // stable-per-instance string; the type name suffices.
+            let type_name = primary.get_type().name()?.to_str()?.to_string();
+            (
+                Box::new(PyReaderBridge {
+                    obj: primary.clone().unbind(),
+                }),
+                type_name,
+            )
+        };
 
         let config = CacheConfig::from_env().merge(CacheConfigOverride {
             enabled,
