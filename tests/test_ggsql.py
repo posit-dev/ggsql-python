@@ -842,6 +842,24 @@ class TestWriterDimensionValidation:
             ggsql.save(spec, tmp_path / "plot.svg", width=0)
 
 
+class TestWriterConcurrency:
+    """Native writers release the GIL while rendering; concurrent renders
+    of a shared writer and spec must produce identical, correct output."""
+
+    def test_concurrent_svg_renders(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        writer = ggsql.SVGWriter()
+        expected = writer.render(spec)
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(lambda _: writer.render(spec), range(8)))
+
+        assert all(svg == expected for svg in results)
+
+
 class TestBuiltinData:
     """Integration coverage for builtin datasets (ggsql:... relations)."""
 

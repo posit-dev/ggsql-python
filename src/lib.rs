@@ -504,9 +504,12 @@ impl PySVGWriter {
     /// ------
     /// ValueError
     ///     If rendering fails.
-    fn render(&self, spec: &PySpec) -> PyResult<(String, Vec<String>)> {
-        self.inner
-            .render_reporting(&spec.inner)
+    fn render(&self, py: Python<'_>, spec: &PySpec) -> PyResult<(String, Vec<String>)> {
+        // Rendering is pure Rust work on immutable data, so release the GIL
+        // while it runs to avoid blocking other Python threads. This is
+        // compiler-checked: detach requires a Send closure, so this only
+        // builds if the writer and spec are safe to share.
+        py.detach(|| self.inner.render_reporting(&spec.inner))
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
     }
 }
@@ -571,9 +574,9 @@ impl PyPDFWriter {
     /// ValueError
     ///     If rendering fails.
     fn render(&self, py: Python<'_>, spec: &PySpec) -> PyResult<(Py<PyBytes>, Vec<String>)> {
-        let (bytes, warnings) = self
-            .inner
-            .render_reporting(&spec.inner)
+        // Release the GIL while rendering (see PySVGWriter::render).
+        let (bytes, warnings) = py
+            .detach(|| self.inner.render_reporting(&spec.inner))
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
         Ok((PyBytes::new(py, &bytes).unbind(), warnings))
     }
@@ -632,9 +635,9 @@ impl PyHepWriter {
     /// ValueError
     ///     If rendering fails.
     fn render(&self, py: Python<'_>, spec: &PySpec) -> PyResult<(Py<PyBytes>, Vec<String>)> {
-        let (bytes, warnings) = self
-            .inner
-            .render_reporting(&spec.inner)
+        // Release the GIL while rendering (see PySVGWriter::render).
+        let (bytes, warnings) = py
+            .detach(|| self.inner.render_reporting(&spec.inner))
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
         Ok((PyBytes::new(py, &bytes).unbind(), warnings))
     }
