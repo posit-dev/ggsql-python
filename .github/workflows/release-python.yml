@@ -70,8 +70,12 @@ jobs:
           name: wheels-macos-${{ matrix.target }}
           path: dist
 
+  # Pinned to windows-2022: bundled duckdb (via ggsql 0.5.2's duckdb
+  # ~1.10502 pin) does not compile on windows-latest's VS2026/v145 STL.
+  # See the matching note in python.yml. Revert once ggsql depends on
+  # duckdb ~1.10506.
   windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
