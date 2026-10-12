@@ -1047,3 +1047,57 @@ class TestCachingReader:
         reader.execute_sql("SELECT * FROM t")
         reader.execute_sql("SELECT * FROM t")
         assert primary.calls == 2
+
+
+class TestCachingReaderCapabilities:
+    """The scenarios querychat cannot serve today without CachingReader."""
+
+    class _CountingReader:
+        """Bridged primary that counts source reads, backed by duckdb."""
+
+        def __init__(self):
+            self.calls = 0
+            self.conn = duckdb.connect()
+            self.conn.execute(
+                "CREATE TABLE t AS SELECT * FROM (VALUES (1), (2), (3)) AS t(v)"
+            )
+
+        def execute_sql(self, sql: str) -> pa.Table:
+            self.calls += 1
+            return self.conn.execute(sql).arrow()
+
+        def register(self, name: str, table: pa.Table, _replace: bool) -> None:
+            self.conn.register(name, table)
+
+        def unregister(self, name: str) -> None:
+            self.conn.unregister(name)
+
+    def test_layer_level_source_through_bridge(self):
+        """VISUALISE ... FROM <table> works through a bridged primary.
+
+        This is the querychat scenario: today querychat rejects any query
+        with a layer-level source because it cannot be replayed from one
+        final SQL result. Through CachingReader the layer source is staged
+        into the cache, so the query runs end to end.
+        """
+        primary = self._CountingReader()
+        reader = ggsql.CachingReader(primary)
+        spec = reader.execute("VISUALISE x DRAW histogram MAPPING v AS x FROM t")
+        assert spec is not None
+
+    def test_registered_table_routes_to_cache(self):
+        """A registered table is cache-resident; reading it skips the primary."""
+        primary = self._CountingReader()
+        reader = ggsql.CachingReader(primary)
+        reader.register("only_in_cache", pa.table({"v": [1, 2, 3]}))
+        spec = reader.execute(
+            "VISUALISE x DRAW histogram MAPPING v AS x FROM only_in_cache"
+        )
+        assert spec is not None
+        assert primary.calls == 0
+
+    def test_top_level_execute_fast_path(self):
+        """ggsql.execute() recognizes CachingReader as native (no bridge)."""
+        reader = ggsql.CachingReader("duckdb://memory")
+        spec = ggsql.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point", reader)
+        assert spec.metadata()["rows"] == 1
