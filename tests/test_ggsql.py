@@ -961,10 +961,35 @@ class TestBuiltinData:
         assert "<svg" in svg
 
 
+class _CountingReader:
+    """Bridged primary that counts source reads, backed by duckdb."""
+
+    def __init__(self):
+        self.calls = 0
+        self.conn = duckdb.connect()
+        self.conn.execute(
+            "CREATE TABLE t AS SELECT * FROM (VALUES (1), (2), (3)) AS t(v)"
+        )
+
+    def execute_sql(self, sql: str) -> pa.Table:
+        self.calls += 1
+        return self.conn.execute(sql).arrow()
+
+    def register(self, name: str, table: pa.Table, _replace: bool) -> None:
+        self.conn.register(name, table)
+
+    def unregister(self, name: str) -> None:
+        self.conn.unregister(name)
+
+
 class TestCachingReader:
     def test_create_with_connection_string(self):
         reader = ggsql.CachingReader("duckdb://memory")
         assert reader is not None
+
+    def test_exported_at_package_level(self):
+        assert "CachingReader" in ggsql.__all__
+        assert ggsql.CachingReader.__module__ == "ggsql._ggsql"
 
     def test_rejects_non_duckdb_scheme(self):
         with pytest.raises(ValueError, match="duckdb://"):
@@ -991,42 +1016,22 @@ class TestCachingReader:
         spec = reader.execute("SELECT * FROM mytab VISUALISE x, y DRAW point")
         assert spec.metadata()["rows"] == 2
 
-    class _CountingReader:
-        """Bridged primary that counts source reads, backed by duckdb."""
-
-        def __init__(self):
-            self.calls = 0
-            self.conn = duckdb.connect()
-            self.conn.execute(
-                "CREATE TABLE t AS SELECT * FROM (VALUES (1), (2), (3)) AS t(v)"
-            )
-
-        def execute_sql(self, sql: str) -> pa.Table:
-            self.calls += 1
-            return self.conn.execute(sql).arrow()
-
-        def register(self, name: str, table: pa.Table, _replace: bool) -> None:
-            self.conn.register(name, table)
-
-        def unregister(self, name: str) -> None:
-            self.conn.unregister(name)
-
     def test_memoizes_identical_reads(self):
-        primary = self._CountingReader()
+        primary = _CountingReader()
         reader = ggsql.CachingReader(primary)
         reader.execute_sql("SELECT * FROM t")
         reader.execute_sql("SELECT * FROM t")
         assert primary.calls == 1
 
     def test_distinct_reads_each_hit_primary(self):
-        primary = self._CountingReader()
+        primary = _CountingReader()
         reader = ggsql.CachingReader(primary)
         reader.execute_sql("SELECT * FROM t")
         reader.execute_sql("SELECT v + 1 AS v FROM t")
         assert primary.calls == 2
 
     def test_ttl_expiry(self):
-        primary = self._CountingReader()
+        primary = _CountingReader()
         reader = ggsql.CachingReader(primary, ttl_secs=1)
         reader.execute_sql("SELECT * FROM t")
         time.sleep(1.1)
@@ -1034,7 +1039,7 @@ class TestCachingReader:
         assert primary.calls == 2
 
     def test_disabled_kwarg(self):
-        primary = self._CountingReader()
+        primary = _CountingReader()
         reader = ggsql.CachingReader(primary, enabled=False)
         reader.execute_sql("SELECT * FROM t")
         reader.execute_sql("SELECT * FROM t")
@@ -1042,7 +1047,7 @@ class TestCachingReader:
 
     def test_disabled_env_var(self, monkeypatch):
         monkeypatch.setenv("GGSQL_CACHE_DISABLED", "1")
-        primary = self._CountingReader()
+        primary = _CountingReader()
         reader = ggsql.CachingReader(primary)
         reader.execute_sql("SELECT * FROM t")
         reader.execute_sql("SELECT * FROM t")
@@ -1052,26 +1057,6 @@ class TestCachingReader:
 class TestCachingReaderCapabilities:
     """The scenarios querychat cannot serve today without CachingReader."""
 
-    class _CountingReader:
-        """Bridged primary that counts source reads, backed by duckdb."""
-
-        def __init__(self):
-            self.calls = 0
-            self.conn = duckdb.connect()
-            self.conn.execute(
-                "CREATE TABLE t AS SELECT * FROM (VALUES (1), (2), (3)) AS t(v)"
-            )
-
-        def execute_sql(self, sql: str) -> pa.Table:
-            self.calls += 1
-            return self.conn.execute(sql).arrow()
-
-        def register(self, name: str, table: pa.Table, _replace: bool) -> None:
-            self.conn.register(name, table)
-
-        def unregister(self, name: str) -> None:
-            self.conn.unregister(name)
-
     def test_layer_level_source_through_bridge(self):
         """VISUALISE ... FROM <table> works through a bridged primary.
 
@@ -1080,14 +1065,14 @@ class TestCachingReaderCapabilities:
         final SQL result. Through CachingReader the layer source is staged
         into the cache, so the query runs end to end.
         """
-        primary = self._CountingReader()
+        primary = _CountingReader()
         reader = ggsql.CachingReader(primary)
         spec = reader.execute("VISUALISE x DRAW histogram MAPPING v AS x FROM t")
         assert spec is not None
 
     def test_registered_table_routes_to_cache(self):
         """A registered table is cache-resident; reading it skips the primary."""
-        primary = self._CountingReader()
+        primary = _CountingReader()
         reader = ggsql.CachingReader(primary)
         reader.register("only_in_cache", pa.table({"v": [1, 2, 3]}))
         spec = reader.execute(
