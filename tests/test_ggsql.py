@@ -10,6 +10,7 @@ Rust logic (parsing, Vega-Lite generation) is tested in the Rust test suite.
 
 import json
 import re
+import warnings
 from pathlib import Path
 
 import duckdb
@@ -800,6 +801,56 @@ class TestSave:
     def test_save_invalid_dpi_raises(self, spec, tmp_path):
         with pytest.raises(ValueError, match="dpi must be a positive"):
             ggsql.save(spec, tmp_path / "plot.svg", dpi=0)
+
+
+class TestWriterWarnings:
+    """Writer render issues (from Rust's render_reporting) are surfaced as
+    UserWarnings while the rendered output is returned unchanged."""
+
+    class _StubInner:
+        """Stand-in for the Rust writer returning a fixed (output, issues)."""
+
+        def __init__(self, output, issues):
+            self._output = output
+            self._issues = issues
+
+        def render(self, _spec):
+            return self._output, self._issues
+
+    @pytest.fixture
+    def spec(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        return reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+
+    @pytest.mark.parametrize(
+        "writer_cls,output",
+        [
+            (ggsql.SVGWriter, "<svg/>"),
+            (ggsql.PDFWriter, b"%PDF-stub"),
+            (ggsql.HepWriter, b"hep-stub"),
+        ],
+    )
+    def test_render_issues_emit_userwarning(self, spec, writer_cls, output):
+        writer = writer_cls()
+        issues = ["font 'Foo' not found", "missing glyph for '×'"]
+        writer._inner = self._StubInner(output, issues)
+
+        with pytest.warns(UserWarning, match="2 issue") as record:
+            result = writer.render(spec)
+
+        assert result == output
+        message = str(record[0].message)
+        assert all(issue in message for issue in issues)
+
+    def test_empty_issues_emit_no_warning(self, spec):
+        writer = ggsql.SVGWriter()
+        writer._inner = self._StubInner("<svg/>", [])
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = writer.render(spec)
+
+        assert result == "<svg/>"
 
 
 class TestVersion:

@@ -133,6 +133,16 @@ ggsql.save(spec, "plot.hep")
 ggsql.save(spec, "plot.json")  # Vega-Lite JSON
 ```
 
+> **Linux runtime requirement:** the native writers load `libfontconfig.so.1`
+> at runtime (via `dlopen`) and need at least one installed font for text
+> layout. Prebuilt wheels do not bundle these. On slim/container images
+> (e.g., `python:*-slim`), install them explicitly:
+>
+> ```sh
+> apt-get install -y libfontconfig1 fonts-dejavu-core
+> ```
+>
+> Without fontconfig, renders silently drop all text.
 ## API Reference
 
 ### Classes
