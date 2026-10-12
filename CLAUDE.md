@@ -38,6 +38,16 @@ To pick up a new version of the upstream `ggsql` Rust crate, bump its version in
 
 **Key design pattern**: Two-stage API — `reader.execute(query) -> Spec`, then `writer.render(spec) -> str` or `writer.render_chart(spec) -> AltairChart`. The `render_altair()` shortcut collapses both stages.
 
+## Releasing
+
+The Python Release workflow (`.github/workflows/release-python.yml`) triggers on tags matching `py/v*`. When creating a GitHub release, use `gh release create py/vX.Y.Z` — a plain `vX.Y.Z` tag won't trigger the build/publish pipeline.
+
+Release checklist (all in the bump commit, before tagging):
+
+1. Rename the `## UNRELEASED` section of `CHANGELOG.md` to the new version.
+2. Bump `version` in `pyproject.toml` and `Cargo.toml`, then run `uv sync` to update `uv.lock` and `Cargo.lock`. (`ggsql.__version__` follows automatically via `importlib.metadata`.)
+3. After the release workflow finishes, check that the GitHub release notes summarize the changelog section — edit with `gh release edit py/vX.Y.Z` if needed.
+
 ## `.cargo/config.toml`
 
 Sets `GGSQL_SKIP_GENERATE=1` so tree-sitter uses its pre-generated parser rather than regenerating from `grammar.js`. Don't remove this.

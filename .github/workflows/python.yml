@@ -11,14 +11,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # NOTE: windows is pinned to windows-2022 (not windows-latest).
+        # ggsql 0.5.2 pins duckdb ~1.10502, whose bundled build uses
+        # stdext::checked_array_iterator (via vendored fmt). That symbol is
+        # deprecated but present in windows-2022's VS2022/v143 STL, and fully
+        # removed in the VS2026/v145 STL that windows-latest now provides, so
+        # the duckdb build hard-fails there (duckdb/duckdb-rs#783, fixed in
+        # libduckdb-sys 1.10506). Upstream ggsql pins windows-2022 for the
+        # same reason. Revert to windows-latest once we depend on a ggsql
+        # release with duckdb ~1.10506.
+        os: [ubuntu-latest, macos-latest, windows-2022]
         python: ["3.10", "3.11", "3.12", "3.13"]
         include:
           - os: ubuntu-latest
             delay: 140
           - os: macos-latest
             delay: 210
-          - os: windows-latest
+          - os: windows-2022
             delay: 70
     runs-on: ${{ matrix.os }}
     steps:
@@ -68,3 +77,42 @@ jobs:
       - name: Run tests
         shell: bash
         run: pytest tests/ -v
+
+      # The abi3 wheel is identical across Python legs; keep just one for
+      # the wheel smoke test below.
+      - name: Upload Linux wheel
+        if: runner.os == 'Linux' && matrix.python == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ggsql-wheel
+          path: target/wheels/ggsql-*.whl
+          retention-days: 5
+
+  # Native SVG/PDF/HEP writers dlopen libfontconfig.so.1 at runtime and
+  # need installed fonts — neither is expressible in wheel metadata, and
+  # slim Linux images lack both. Render in a minimal container provisioned
+  # per the README to catch packaging/runtime regressions.
+  wheel-smoke-test:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      # NOTE: checkout must precede the download — it cleans the workspace.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ggsql-wheel
+          path: wheelhouse
+
+      - name: Smoke test wheel in a minimal container
+        run: |
+          WHEEL=$(basename wheelhouse/*.whl)
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/wheelhouse:/wheels:ro" \
+            -v "$GITHUB_WORKSPACE/scripts/smoke_test_wheel.py:/smoke_test.py:ro" \
+            python:3.12-slim bash -euxo pipefail -c "
+              apt-get update &&
+              apt-get install -y --no-install-recommends libfontconfig1 fonts-dejavu-core &&
+              pip install --no-cache-dir '/wheels/$WHEEL' &&
+              python /smoke_test.py
+            "

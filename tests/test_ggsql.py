@@ -9,6 +9,9 @@ Rust logic (parsing, Vega-Lite generation) is tested in the Rust test suite.
 """
 
 import json
+import re
+import warnings
+from pathlib import Path
 
 import duckdb
 import pyarrow as pa
@@ -59,14 +62,15 @@ class TestValidate:
         assert len(validated.errors()) > 0
 
     def test_missing_required_aesthetic(self):
-        # Point requires x and y, only providing x
+        # Text requires label, not providing it
+        # (point's position aesthetics became optional in ggsql 0.4.0)
         validated = ggsql.validate(
-            "SELECT 1 AS x, 2 AS y VISUALISE DRAW point MAPPING x AS x"
+            "SELECT 1 AS x, 2 AS y VISUALISE DRAW text MAPPING x AS x"
         )
         assert not validated.valid()
         errors = validated.errors()
         assert len(errors) > 0
-        assert any("y" in e["message"] for e in errors)
+        assert any("label" in e["message"] for e in errors)
 
 
 class TestDuckDBReader:
@@ -703,3 +707,254 @@ class TestVegaLiteWriterRenderChart:
             assert chart_dict["height"] == raw_spec["height"]
         if "width" in raw_spec:
             assert chart_dict["width"] == raw_spec["width"]
+
+
+class TestSVGWriter:
+    def test_create_writer(self):
+        writer = ggsql.SVGWriter()
+        assert writer is not None
+
+    def test_render_to_svg(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        svg = ggsql.SVGWriter().render(spec)
+        assert isinstance(svg, str)
+        assert "<svg" in svg
+
+    def test_render_with_dimensions(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        svg = ggsql.SVGWriter(width=400, height=300, dpi=96).render(spec)
+        assert isinstance(svg, str)
+        assert "<svg" in svg
+
+
+class TestPDFWriter:
+    def test_create_writer(self):
+        writer = ggsql.PDFWriter()
+        assert writer is not None
+
+    def test_render_to_pdf(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        pdf = ggsql.PDFWriter().render(spec)
+        assert isinstance(pdf, bytes)
+        assert pdf.startswith(b"%PDF")
+
+    def test_render_with_dimensions(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        pdf = ggsql.PDFWriter(width=400, height=300, dpi=96).render(spec)
+        assert isinstance(pdf, bytes)
+        assert pdf.startswith(b"%PDF")
+
+
+class TestHepWriter:
+    def test_create_writer(self):
+        writer = ggsql.HepWriter()
+        assert writer is not None
+
+    def test_render_to_hep(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        doc = ggsql.HepWriter().render(spec)
+        assert isinstance(doc, bytes)
+        assert len(doc) > 0
+
+
+class TestWriterRepr:
+    def test_svg_writer_repr(self):
+        assert repr(ggsql.SVGWriter()) == "SVGWriter(width=600, height=400, dpi=96.0)"
+        assert (
+            repr(ggsql.SVGWriter(width=800, height=600, dpi=150))
+            == "SVGWriter(width=800, height=600, dpi=150)"
+        )
+
+    def test_pdf_writer_repr(self):
+        assert repr(ggsql.PDFWriter()) == "PDFWriter(width=600, height=400, dpi=96.0)"
+        assert (
+            repr(ggsql.PDFWriter(width=800, height=600, dpi=150.5))
+            == "PDFWriter(width=800, height=600, dpi=150.5)"
+        )
+
+    def test_hep_writer_repr(self):
+        assert repr(ggsql.HepWriter()) == "HepWriter()"
+
+    def test_vegalite_writer_repr(self):
+        assert repr(ggsql.VegaLiteWriter()) == "VegaLiteWriter()"
+
+
+class TestSave:
+    @pytest.fixture
+    def spec(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        return reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+
+    def test_save_svg(self, spec, tmp_path):
+        out = tmp_path / "plot.svg"
+        ggsql.save(spec, out)
+        assert "<svg" in out.read_text()
+
+    def test_save_pdf(self, spec, tmp_path):
+        out = tmp_path / "plot.pdf"
+        ggsql.save(spec, out)
+        assert out.read_bytes().startswith(b"%PDF")
+
+    def test_save_hep(self, spec, tmp_path):
+        out = tmp_path / "plot.hep"
+        ggsql.save(spec, out)
+        assert len(out.read_bytes()) > 0
+
+    def test_save_json(self, spec, tmp_path):
+        out = tmp_path / "plot.json"
+        ggsql.save(spec, out)
+        spec_dict = json.loads(out.read_text())
+        assert "$schema" in spec_dict or "mark" in spec_dict
+
+    def test_save_with_dimensions(self, spec, tmp_path):
+        out = tmp_path / "plot.svg"
+        ggsql.save(spec, out, width=400, height=300, dpi=96)
+        assert "<svg" in out.read_text()
+
+    def test_save_unknown_extension_raises(self, spec, tmp_path):
+        with pytest.raises(ValueError, match="Unsupported file extension"):
+            ggsql.save(spec, tmp_path / "plot.xyz")
+
+    @pytest.mark.parametrize(
+        "ext", [".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"]
+    )
+    def test_save_raster_extension_suggests_svg(self, spec, tmp_path, ext):
+        with pytest.raises(ValueError, match=r"Save as \.svg"):
+            ggsql.save(spec, tmp_path / f"plot{ext}")
+
+    def test_save_invalid_dpi_raises(self, spec, tmp_path):
+        with pytest.raises(ValueError, match="dpi must be a positive"):
+            ggsql.save(spec, tmp_path / "plot.svg", dpi=0)
+
+
+class TestWriterWarnings:
+    """Writer render issues (from Rust's render_reporting) are surfaced as
+    UserWarnings while the rendered output is returned unchanged."""
+
+    class _StubInner:
+        """Stand-in for the Rust writer returning a fixed (output, issues)."""
+
+        def __init__(self, output, issues):
+            self._output = output
+            self._issues = issues
+
+        def render(self, _spec):
+            return self._output, self._issues
+
+    @pytest.fixture
+    def spec(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        return reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+
+    @pytest.mark.parametrize(
+        "writer_cls,output",
+        [
+            (ggsql.SVGWriter, "<svg/>"),
+            (ggsql.PDFWriter, b"%PDF-stub"),
+            (ggsql.HepWriter, b"hep-stub"),
+        ],
+    )
+    def test_render_issues_emit_userwarning(self, spec, writer_cls, output):
+        writer = writer_cls()
+        issues = ["font 'Foo' not found", "missing glyph for '×'"]
+        writer._inner = self._StubInner(output, issues)
+
+        with pytest.warns(UserWarning, match="2 issue") as record:
+            result = writer.render(spec)
+
+        assert result == output
+        message = str(record[0].message)
+        assert all(issue in message for issue in issues)
+
+    def test_empty_issues_emit_no_warning(self, spec):
+        writer = ggsql.SVGWriter()
+        writer._inner = self._StubInner("<svg/>", [])
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = writer.render(spec)
+
+        assert result == "<svg/>"
+
+
+class TestVersion:
+    def test_version_matches_pyproject(self):
+        pyproject = Path(__file__).parent.parent / "pyproject.toml"
+        match = re.search(r'^version = "([^"]+)"', pyproject.read_text(), re.M)
+        assert match is not None
+        assert ggsql.__version__ == match.group(1)
+
+
+class TestWriterDpiValidation:
+    @pytest.mark.parametrize("bad_dpi", [0, -1, -96.0, float("nan"), float("inf")])
+    def test_svg_writer_rejects_invalid_dpi(self, bad_dpi):
+        with pytest.raises(ValueError, match="dpi must be a positive"):
+            ggsql.SVGWriter(dpi=bad_dpi)
+
+    @pytest.mark.parametrize("bad_dpi", [0, -1, -96.0, float("nan"), float("inf")])
+    def test_pdf_writer_rejects_invalid_dpi(self, bad_dpi):
+        with pytest.raises(ValueError, match="dpi must be a positive"):
+            ggsql.PDFWriter(dpi=bad_dpi)
+
+
+class TestWriterDimensionValidation:
+    @pytest.mark.parametrize("writer", [ggsql.SVGWriter, ggsql.PDFWriter])
+    @pytest.mark.parametrize("bad_width", [0, -1, -600])
+    def test_rejects_nonpositive_width(self, writer, bad_width):
+        with pytest.raises(ValueError, match="width must be a positive"):
+            writer(width=bad_width)
+
+    @pytest.mark.parametrize("writer", [ggsql.SVGWriter, ggsql.PDFWriter])
+    @pytest.mark.parametrize("bad_height", [0, -1, -400])
+    def test_rejects_nonpositive_height(self, writer, bad_height):
+        with pytest.raises(ValueError, match="height must be a positive"):
+            writer(height=bad_height)
+
+    def test_save_rejects_nonpositive_dimensions(self, tmp_path):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        with pytest.raises(ValueError, match="width must be a positive"):
+            ggsql.save(spec, tmp_path / "plot.svg", width=0)
+
+
+class TestWriterConcurrency:
+    """Native writers release the GIL while rendering; concurrent renders
+    of a shared writer and spec must produce identical, correct output."""
+
+    def test_concurrent_svg_renders(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        writer = ggsql.SVGWriter()
+        expected = writer.render(spec)
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(lambda _: writer.render(spec), range(8)))
+
+        assert all(svg == expected for svg in results)
+
+
+class TestBuiltinData:
+    """Integration coverage for builtin datasets (ggsql:... relations)."""
+
+    def test_execute_builtin_dataset(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute(
+            "SELECT * FROM ggsql:penguins "
+            "VISUALISE DRAW point MAPPING bill_len AS x, bill_dep AS y"
+        )
+        assert spec is not None
+
+    def test_builtin_dataset_renders_svg(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute(
+            "VISUALISE FROM ggsql:airquality DRAW point MAPPING Temp AS x, Ozone AS y"
+        )
+        svg = ggsql.SVGWriter().render(spec)
+        assert "<svg" in svg

@@ -1,10 +1,26 @@
 # Changelog
 
-## UNRELEASED
+## 0.5.2
+
+### Added
+
+- New native writers `SVGWriter`, `PDFWriter`, and `HepWriter`, rendered directly by ggsql (via hephaestus) with no JavaScript round-trip. Each exposes `render(spec)` returning `str` (SVG) or `bytes` (PDF/HEP); render warnings are surfaced via `warnings.warn()`.
+- New `ggsql.save(spec, file, ...)` helper that writes a spec to disk, picking the writer from the file extension (`.svg`, `.pdf`, `.hep`, or `.json` for Vega-Lite).
+- Enabled the crate's `builtin-data` feature, making builtin datasets such as `ggsql:world` available.
 
 ### Changed
 
+- Upgraded to ggsql Rust crate v0.5.2 (from v0.3.3). See the [crate changelog](https://github.com/posit-dev/ggsql/blob/main/CHANGELOG.md) for the many language and rendering improvements in 0.4.0–0.5.2.
+- Upgraded the Arrow dependency from v56 to v58.
+- Declared Rust MSRV is now 1.88 (required by the native-writer dependency graph, e.g. parley 0.9).
+
+## 0.3.3
+
+### Changed
+
+- Upgraded to ggsql Rust crate v0.3.3 (hotfix).
 - `VegaLiteWriter.render_chart()` and `render_altair()` now accept `validate`, `height`, and `width` as explicit keyword arguments. `height` and `width` default to `None`, which preserves whatever dimensions ggsql produces. `validate` defaults to `False` (same behavior as before, now a named parameter).
+- When Altair can't deserialize a spec into the expected chart subclass (e.g., `LayerChart`), the converter now falls back to `altair.Chart` instead of raising. The chart still displays correctly; only Altair-level round-tripping (`.to_dict()`) is lost.
 
 ## 0.3.2
 
@@ -12,7 +28,6 @@
 
 - Upgraded to ggsql Rust crate v0.3.2.
 - `render_altair()` and `VegaLiteWriter.render_chart()` now default to `validate=False` when creating Altair chart objects. This avoids `ValidationError`s for valid specs (e.g., boxplots) that use Vega-Lite features not yet reflected in Altair's schema. Pass `validate=True` to re-enable.
-- When Altair can't deserialize a spec into the expected chart subclass (e.g., `LayerChart`), the converter now falls back to `altair.Chart` instead of raising. The chart still displays correctly; only Altair-level round-tripping (`.to_dict()`) is lost.
 
 ## 0.3.1
 

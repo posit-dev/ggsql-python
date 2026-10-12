@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
+import warnings
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _package_version
+from pathlib import Path
 from typing import Any, Union
 
 import altair
@@ -9,6 +14,9 @@ from narwhals.typing import IntoFrame
 
 from ggsql._ggsql import (
     DuckDBReader,
+    HepWriter as _RustHepWriter,
+    PDFWriter as _RustPDFWriter,
+    SVGWriter as _RustSVGWriter,
     VegaLiteWriter as _RustVegaLiteWriter,
     Validated,
     Spec,
@@ -18,13 +26,24 @@ from ggsql._ggsql import (
 
 # PyO3 classes default to __module__ = "builtins"; point them at their real
 # home so docs tooling (great-docs/griffe) can locate them.
-for _cls in (DuckDBReader, _RustVegaLiteWriter, Validated, Spec):
+for _cls in (
+    DuckDBReader,
+    _RustHepWriter,
+    _RustPDFWriter,
+    _RustSVGWriter,
+    _RustVegaLiteWriter,
+    Validated,
+    Spec,
+):
     _cls.__module__ = "ggsql._ggsql"
 del _cls
 
 __all__ = [
     # Classes
     "DuckDBReader",
+    "SVGWriter",
+    "PDFWriter",
+    "HepWriter",
     "VegaLiteWriter",
     "Validated",
     "Spec",
@@ -32,8 +51,13 @@ __all__ = [
     "validate",
     "execute",
     "render_altair",
+    "save",
 ]
-__version__ = "0.3.0"
+
+try:
+    __version__ = _package_version("ggsql")
+except PackageNotFoundError:  # not installed (e.g., running from a source tree)
+    __version__ = "0.0.0"
 
 # Type alias for any Altair chart type
 AltairChart = Union[
@@ -45,6 +69,15 @@ AltairChart = Union[
     altair.VConcatChart,
     altair.RepeatChart,
 ]
+
+
+def _warn_render_issues(issues: list[str]) -> None:
+    """Surface writer render warnings (from Rust's render_reporting) to the user."""
+    if not issues:
+        return
+    message = f"ggsql writer reported {len(issues)} issue(s) while rendering:"
+    message += "\n" + "\n".join(f"  - {issue}" for issue in issues)
+    warnings.warn(message, UserWarning, stacklevel=3)
 
 
 def _json_to_altair_chart(vegalite_json: str, **kwargs: Any) -> AltairChart:
@@ -75,6 +108,135 @@ def _json_to_altair_chart(vegalite_json: str, **kwargs: Any) -> AltairChart:
     return altair.Chart.from_json(vegalite_json, **kwargs)
 
 
+def _validate_dpi(dpi: float) -> None:
+    """Reject non-positive or non-finite DPI before reaching the renderer."""
+    if not math.isfinite(dpi) or dpi <= 0:
+        raise ValueError(f"dpi must be a positive, finite number, got {dpi!r}")
+
+
+def _validate_dimension(name: str, value: int) -> None:
+    """Reject non-positive canvas dimensions before reaching the renderer."""
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}")
+
+
+class SVGWriter:
+    """SVG output writer using ggsql's native renderer.
+
+    Parameters
+    ----------
+    width
+        Canvas width in pixels.
+    height
+        Canvas height in pixels.
+    dpi
+        Canvas resolution in dots per inch.
+
+    Methods
+    -------
+    render(spec)
+        Render a Spec to an SVG string.
+    """
+
+    def __init__(self, width: int = 600, height: int = 400, dpi: float = 96.0) -> None:
+        _validate_dimension("width", width)
+        _validate_dimension("height", height)
+        _validate_dpi(dpi)
+        self._width = width
+        self._height = height
+        self._dpi = dpi
+        self._inner = _RustSVGWriter(width, height, dpi)
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(width={self._width!r}, "
+            f"height={self._height!r}, dpi={self._dpi!r})"
+        )
+
+    def render(self, spec: Spec) -> str:
+        """Render a Spec to an SVG string.
+
+        Render warnings reported by the writer are surfaced via
+        ``warnings.warn()``.
+        """
+        output, issues = self._inner.render(spec)
+        _warn_render_issues(issues)
+        return output
+
+
+class PDFWriter:
+    """PDF output writer using ggsql's native renderer.
+
+    Parameters
+    ----------
+    width
+        Canvas width in pixels.
+    height
+        Canvas height in pixels.
+    dpi
+        Canvas resolution in dots per inch.
+
+    Methods
+    -------
+    render(spec)
+        Render a Spec to a PDF document (bytes).
+    """
+
+    def __init__(self, width: int = 600, height: int = 400, dpi: float = 96.0) -> None:
+        _validate_dimension("width", width)
+        _validate_dimension("height", height)
+        _validate_dpi(dpi)
+        self._width = width
+        self._height = height
+        self._dpi = dpi
+        self._inner = _RustPDFWriter(width, height, dpi)
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(width={self._width!r}, "
+            f"height={self._height!r}, dpi={self._dpi!r})"
+        )
+
+    def render(self, spec: Spec) -> bytes:
+        """Render a Spec to a PDF document as bytes.
+
+        Render warnings reported by the writer are surfaced via
+        ``warnings.warn()``.
+        """
+        output, issues = self._inner.render(spec)
+        _warn_render_issues(issues)
+        return output
+
+
+class HepWriter:
+    """.hep plot document writer using ggsql's native renderer.
+
+    A `.hep` document is a self-contained description of the resolved plot
+    that a compatible consumer can render and re-layout at any size.
+
+    Methods
+    -------
+    render(spec)
+        Render a Spec to a .hep plot document (bytes).
+    """
+
+    def __init__(self) -> None:
+        self._inner = _RustHepWriter()
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}()"
+
+    def render(self, spec: Spec) -> bytes:
+        """Render a Spec to a .hep plot document as bytes.
+
+        Render warnings reported by the writer are surfaced via
+        ``warnings.warn()``.
+        """
+        output, issues = self._inner.render(spec)
+        _warn_render_issues(issues)
+        return output
+
+
 class VegaLiteWriter:
     """Vega-Lite v6 JSON output writer.
 
@@ -88,6 +250,9 @@ class VegaLiteWriter:
 
     def __init__(self) -> None:
         self._inner = _RustVegaLiteWriter()
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}()"
 
     def render(self, spec: Spec) -> str:
         """Render a Spec to a Vega-Lite JSON string."""
@@ -133,6 +298,70 @@ class VegaLiteWriter:
                 spec_dict["width"] = width
             vegalite_json = json.dumps(spec_dict)
         return _json_to_altair_chart(vegalite_json, validate=validate, **kwargs)
+
+
+def save(
+    spec: Spec,
+    file: str | Path,
+    *,
+    width: int = 600,
+    height: int = 400,
+    dpi: float = 96.0,
+) -> Path:
+    """Save a ggsql spec to a file.
+
+    The format is derived from the file extension: `.svg`, `.pdf`, and
+    `.hep` are written by the corresponding native writer, and `.json`
+    writes the Vega-Lite representation.
+
+    Parameters
+    ----------
+    spec
+        The resolved visualization specification from ``reader.execute()``.
+    file
+        Output file path. Extension determines format: `.svg`, `.pdf`,
+        `.hep`, or `.json`.
+    width
+        Canvas width in pixels (ignored for `.hep` and `.json`).
+    height
+        Canvas height in pixels (ignored for `.hep` and `.json`).
+    dpi
+        Canvas resolution in dots per inch (ignored for `.hep` and `.json`).
+
+    Returns
+    -------
+    Path
+        The path that was written.
+
+    Raises
+    ------
+    ValueError
+        If the file extension is not supported. Raster extensions (`.png`,
+        `.jpg`, `.tif`, `.webp`) raise with a suggestion to save as `.svg`
+        and convert, since ggsql's raster writers need a GPU adapter.
+    """
+    path = Path(file)
+    ext = path.suffix.lower()
+    if ext == ".svg":
+        path.write_text(SVGWriter(width, height, dpi).render(spec), encoding="utf-8")
+    elif ext == ".pdf":
+        path.write_bytes(PDFWriter(width, height, dpi).render(spec))
+    elif ext == ".hep":
+        path.write_bytes(HepWriter().render(spec))
+    elif ext == ".json":
+        path.write_text(VegaLiteWriter().render(spec), encoding="utf-8")
+    elif ext in (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"):
+        raise ValueError(
+            f"Raster output ({ext!r}) is not supported: ggsql's raster writers "
+            "require a GPU adapter, which is not available in every environment. "
+            "Save as .svg (or .pdf) and convert with a tool of your choice "
+            "(e.g. ImageMagick, rsvg-convert, or a browser)."
+        )
+    else:
+        raise ValueError(
+            f"Unsupported file extension {ext!r}. Use .svg, .pdf, .hep, or .json."
+        )
+    return path
 
 
 def render_altair(
