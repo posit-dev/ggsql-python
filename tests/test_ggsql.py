@@ -762,6 +762,28 @@ class TestHepWriter:
         assert len(doc) > 0
 
 
+class TestWriterRepr:
+    def test_svg_writer_repr(self):
+        assert repr(ggsql.SVGWriter()) == "SVGWriter(width=600, height=400, dpi=96.0)"
+        assert (
+            repr(ggsql.SVGWriter(width=800, height=600, dpi=150))
+            == "SVGWriter(width=800, height=600, dpi=150)"
+        )
+
+    def test_pdf_writer_repr(self):
+        assert repr(ggsql.PDFWriter()) == "PDFWriter(width=600, height=400, dpi=96.0)"
+        assert (
+            repr(ggsql.PDFWriter(width=800, height=600, dpi=150.5))
+            == "PDFWriter(width=800, height=600, dpi=150.5)"
+        )
+
+    def test_hep_writer_repr(self):
+        assert repr(ggsql.HepWriter()) == "HepWriter()"
+
+    def test_vegalite_writer_repr(self):
+        assert repr(ggsql.VegaLiteWriter()) == "VegaLiteWriter()"
+
+
 class TestSave:
     @pytest.fixture
     def spec(self):

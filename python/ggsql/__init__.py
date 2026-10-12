@@ -142,7 +142,16 @@ class SVGWriter:
         _validate_dimension("width", width)
         _validate_dimension("height", height)
         _validate_dpi(dpi)
+        self._width = width
+        self._height = height
+        self._dpi = dpi
         self._inner = _RustSVGWriter(width, height, dpi)
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(width={self._width!r}, "
+            f"height={self._height!r}, dpi={self._dpi!r})"
+        )
 
     def render(self, spec: Spec) -> str:
         """Render a Spec to an SVG string.
@@ -177,7 +186,16 @@ class PDFWriter:
         _validate_dimension("width", width)
         _validate_dimension("height", height)
         _validate_dpi(dpi)
+        self._width = width
+        self._height = height
+        self._dpi = dpi
         self._inner = _RustPDFWriter(width, height, dpi)
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(width={self._width!r}, "
+            f"height={self._height!r}, dpi={self._dpi!r})"
+        )
 
     def render(self, spec: Spec) -> bytes:
         """Render a Spec to a PDF document as bytes.
@@ -205,6 +223,9 @@ class HepWriter:
     def __init__(self) -> None:
         self._inner = _RustHepWriter()
 
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}()"
+
     def render(self, spec: Spec) -> bytes:
         """Render a Spec to a .hep plot document as bytes.
 
@@ -229,6 +250,9 @@ class VegaLiteWriter:
 
     def __init__(self) -> None:
         self._inner = _RustVegaLiteWriter()
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}()"
 
     def render(self, spec: Spec) -> str:
         """Render a Spec to a Vega-Lite JSON string."""
