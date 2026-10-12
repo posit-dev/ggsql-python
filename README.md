@@ -161,46 +161,24 @@ writer = ggsql.VegaLiteWriter()
 json_output = writer.render(spec)
 ```
 
-#### `SVGWriter(width: int = 600, height: int = 400, dpi: float = 96.0, **options)`
+#### `SVGWriter(width: int = 600, height: int = 400, dpi: float = 96.0)`
 
 Renders specs to SVG markup using ggsql's native renderer.
 
 - `render(spec: Spec) -> str` — Render to an SVG string.
 
-#### `PDFWriter(width: int = 600, height: int = 400, dpi: float = 96.0, **options)`
+#### `PDFWriter(width: int = 600, height: int = 400, dpi: float = 96.0)`
 
 Renders specs to PDF documents using ggsql's native renderer.
 
 - `render(spec: Spec) -> bytes` — Render to a PDF document.
 
-#### `HepWriter(width=None, height=None, dpi=None, **options)`
+#### `HepWriter()`
 
 Renders specs to `.hep` plot documents (self-contained plot descriptions a
 compatible consumer can re-layout at any size) using ggsql's native renderer.
-The optional `width`/`height`/`dpi` are recorded as hints for the consumer,
-not a fixed size; by default no hint is recorded.
 
 - `render(spec: Spec) -> bytes` — Render to a `.hep` document.
-
-All three native writers accept extra keyword options, validated by ggsql
-(unknown keys and bad values raise `ValueError`):
-
-- `units`: `"px"` (default), `"in"`, `"cm"`, `"mm"`, or `"pt"` — how
-  `width`/`height` are read. `SVGWriter(width=6, height=4, units="in",
-  dpi=300)` produces a 1800×1200 SVG that prints six inches wide.
-- `background`: any CSS color; `"transparent"` emits no background
-  (default is white).
-- SVG only: `text` (`"text"` or `"outline"` — draw glyphs as paths for a
-  self-contained file), `embed_fonts` (inline font files), `id_prefix`
-  (avoid id collisions when inlining several SVGs into one page).
-- PDF only: `compress` (default `True`), `links` (default `True`).
-- HEP only: `lossy` (drop what the format can't carry instead of failing),
-  `embed_fonts`.
-
-```python
-svg = ggsql.SVGWriter(background="transparent").render(spec)
-pdf = ggsql.PDFWriter(width=6, height=4, units="in", dpi=300).render(spec)
-```
 
 #### `Validated`
 
