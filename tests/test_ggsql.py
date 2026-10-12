@@ -10,6 +10,7 @@ Rust logic (parsing, Vega-Lite generation) is tested in the Rust test suite.
 
 import json
 import re
+import time
 import warnings
 from pathlib import Path
 
@@ -989,3 +990,60 @@ class TestCachingReader:
         reader.register("mytab", pa.table({"x": [1, 2], "y": [3, 4]}))
         spec = reader.execute("SELECT * FROM mytab VISUALISE x, y DRAW point")
         assert spec.metadata()["rows"] == 2
+
+    class _CountingReader:
+        """Bridged primary that counts source reads, backed by duckdb."""
+
+        def __init__(self):
+            self.calls = 0
+            self.conn = duckdb.connect()
+            self.conn.execute(
+                "CREATE TABLE t AS SELECT * FROM (VALUES (1), (2), (3)) AS t(v)"
+            )
+
+        def execute_sql(self, sql: str) -> pa.Table:
+            self.calls += 1
+            return self.conn.execute(sql).arrow()
+
+        def register(self, name: str, table: pa.Table, _replace: bool) -> None:
+            self.conn.register(name, table)
+
+        def unregister(self, name: str) -> None:
+            self.conn.unregister(name)
+
+    def test_memoizes_identical_reads(self):
+        primary = self._CountingReader()
+        reader = ggsql.CachingReader(primary)
+        reader.execute_sql("SELECT * FROM t")
+        reader.execute_sql("SELECT * FROM t")
+        assert primary.calls == 1
+
+    def test_distinct_reads_each_hit_primary(self):
+        primary = self._CountingReader()
+        reader = ggsql.CachingReader(primary)
+        reader.execute_sql("SELECT * FROM t")
+        reader.execute_sql("SELECT v + 1 AS v FROM t")
+        assert primary.calls == 2
+
+    def test_ttl_expiry(self):
+        primary = self._CountingReader()
+        reader = ggsql.CachingReader(primary, ttl_secs=1)
+        reader.execute_sql("SELECT * FROM t")
+        time.sleep(1.1)
+        reader.execute_sql("SELECT * FROM t")
+        assert primary.calls == 2
+
+    def test_disabled_kwarg(self):
+        primary = self._CountingReader()
+        reader = ggsql.CachingReader(primary, enabled=False)
+        reader.execute_sql("SELECT * FROM t")
+        reader.execute_sql("SELECT * FROM t")
+        assert primary.calls == 2
+
+    def test_disabled_env_var(self, monkeypatch):
+        monkeypatch.setenv("GGSQL_CACHE_DISABLED", "1")
+        primary = self._CountingReader()
+        reader = ggsql.CachingReader(primary)
+        reader.execute_sql("SELECT * FROM t")
+        reader.execute_sql("SELECT * FROM t")
+        assert primary.calls == 2
