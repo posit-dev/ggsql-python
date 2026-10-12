@@ -958,3 +958,34 @@ class TestBuiltinData:
         )
         svg = ggsql.SVGWriter().render(spec)
         assert "<svg" in svg
+
+
+class TestCachingReader:
+    def test_create_with_connection_string(self):
+        reader = ggsql.CachingReader("duckdb://memory")
+        assert reader is not None
+
+    def test_rejects_non_duckdb_scheme(self):
+        with pytest.raises(ValueError, match="duckdb://"):
+            ggsql.CachingReader("sqlite://memory")
+
+    def test_rejects_duckdb_reader_instance(self):
+        inner = ggsql.DuckDBReader("duckdb://memory")
+        with pytest.raises(ValueError, match="connection string"):
+            ggsql.CachingReader(inner)
+
+    def test_execute(self):
+        reader = ggsql.CachingReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        assert spec.metadata()["rows"] == 1
+
+    def test_execute_sql(self):
+        reader = ggsql.CachingReader("duckdb://memory")
+        table = reader.execute_sql("SELECT 1 AS x")
+        assert table.num_rows == 1
+
+    def test_register_and_query(self):
+        reader = ggsql.CachingReader("duckdb://memory")
+        reader.register("mytab", pa.table({"x": [1, 2], "y": [3, 4]}))
+        spec = reader.execute("SELECT * FROM mytab VISUALISE x, y DRAW point")
+        assert spec.metadata()["rows"] == 2
