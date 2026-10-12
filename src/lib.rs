@@ -10,8 +10,9 @@ use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 
 use ggsql::dataframe::DataFrame;
+use ggsql::reader::cache::{CacheConfig, CacheConfigOverride};
 use ggsql::reader::Spec;
-use ggsql::reader::{DuckDBReader as RustDuckDBReader, Reader};
+use ggsql::reader::{CachingReader as RustCachingReader, DuckDBReader as RustDuckDBReader, Reader};
 use ggsql::validate::{validate as rust_validate, ValidationWarning};
 use ggsql::writer::{
     HepWriter as RustHepWriter, PdfWriter as RustPdfWriter, SvgWriter as RustSvgWriter,
@@ -374,6 +375,215 @@ impl PyDuckDBReader {
     /// >>> spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
     /// >>> writer = VegaLiteWriter()
     /// >>> json_output = writer.render(spec)
+    fn execute(&self, query: &str) -> PyResult<PySpec> {
+        self.inner
+            .execute(query)
+            .map(|s| PySpec { inner: s })
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    }
+}
+
+// ============================================================================
+// PyCachingReader
+// ============================================================================
+
+/// Caching reader: wraps a primary reader with an in-memory DuckDB cache.
+///
+/// Source reads go to the primary and are memoized (TTL + LRU byte budget);
+/// all ggsql-generated derived SQL runs on the private in-memory cache.
+/// Configuration is read from the environment (GGSQL_CACHE_DISABLED,
+/// GGSQL_CACHE_TTL, GGSQL_CACHE_MAX_BYTES) with keyword arguments taking
+/// precedence.
+///
+/// Examples
+/// --------
+/// >>> reader = CachingReader("duckdb://memory", ttl_secs=60)
+/// >>> spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+///
+/// >>> # Wrapping a custom Python reader (bridge protocol):
+/// >>> class MyReader:
+/// ...     def execute_sql(self, sql): ...
+/// ...     def register(self, name, table, replace): ...
+/// ...     def unregister(self, name): ...
+/// >>> reader = CachingReader(MyReader())
+#[pyclass(name = "CachingReader", unsendable)]
+struct PyCachingReader {
+    inner: RustCachingReader,
+}
+
+#[pymethods]
+impl PyCachingReader {
+    /// Create a new caching reader.
+    ///
+    /// Parameters
+    /// ----------
+    /// primary : str or object
+    ///     Either a "duckdb://..." connection string (a fresh native
+    ///     DuckDBReader is constructed internally) or a Python object
+    ///     implementing the reader protocol: execute_sql(sql) ->
+    ///     pyarrow.Table, register(name, table, replace), unregister(name).
+    /// ttl_secs : int, optional
+    ///     Seconds before a memoized read is treated as stale.
+    ///     Default 300 (or GGSQL_CACHE_TTL).
+    /// max_bytes : int, optional
+    ///     Cumulative byte budget across memoized results before LRU
+    ///     eviction. Default 512 MiB (or GGSQL_CACHE_MAX_BYTES).
+    /// enabled : bool, optional
+    ///     When False, source reads always hit the primary: the memo is
+    ///     neither consulted nor written. Note this only disables
+    ///     memoization — registered tables still live in the private
+    ///     in-memory cache, reads referencing them still route there,
+    ///     and derived SQL still runs on the cache backend.
+    ///     Default True (unless GGSQL_CACHE_DISABLED is set).
+    ///
+    /// Raises
+    /// ------
+    /// ValueError
+    ///     If a connection string has an unsupported scheme, or a
+    ///     DuckDBReader instance is passed (pass its connection
+    ///     string instead).
+    #[new]
+    #[pyo3(signature = (primary, *, ttl_secs=None, max_bytes=None, enabled=None))]
+    fn new(
+        primary: &Bound<'_, PyAny>,
+        ttl_secs: Option<u64>,
+        max_bytes: Option<u64>,
+        enabled: Option<bool>,
+    ) -> PyResult<Self> {
+        // Private in-memory DuckDB is the cache backend: derived tables,
+        // registered data, and memoized reads all live there.
+        let cache = RustDuckDBReader::from_connection_string("duckdb://memory")
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+
+        let (primary_reader, primary_uri): (Box<dyn Reader + Send>, String) = if let Ok(uri) =
+            primary.extract::<&str>()
+        {
+            if !uri.starts_with("duckdb://") {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "Unsupported connection string {uri:?}: only duckdb:// primaries are currently supported"
+                    )));
+            }
+            let reader = RustDuckDBReader::from_connection_string(uri)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+            (Box::new(reader), uri.to_string())
+        } else {
+            // Moving the inner reader out of a live pyclass isn't
+            // possible; guide the user to the connection-string form.
+            if primary.downcast::<PyDuckDBReader>().is_ok() {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "CachingReader cannot wrap an existing DuckDBReader; pass its connection string instead (e.g. CachingReader(\"duckdb://memory\"))",
+                    ));
+            }
+            // The URI only feeds cache-key derivation, which just needs a
+            // stable-per-instance string; the type name suffices.
+            let type_name = primary.get_type().name()?.to_str()?.to_string();
+            (
+                Box::new(PyReaderBridge {
+                    obj: primary.clone().unbind(),
+                }),
+                type_name,
+            )
+        };
+
+        let config = CacheConfig::from_env().merge(CacheConfigOverride {
+            enabled,
+            ttl_secs,
+            max_bytes,
+        });
+
+        Ok(Self {
+            inner: RustCachingReader::with_config(
+                primary_reader,
+                Box::new(cache),
+                primary_uri,
+                "duckdb",
+                config,
+            ),
+        })
+    }
+
+    /// Register a pyarrow Table as a queryable table.
+    ///
+    /// The table lands in the in-memory cache; reads referencing its name
+    /// are routed to the cache rather than the primary.
+    ///
+    /// Parameters
+    /// ----------
+    /// name : str
+    ///     The table name to register under.
+    /// table : pyarrow.Table
+    ///     The Arrow table to register.
+    /// replace : bool
+    ///     Whether to replace an existing table of the same name.
+    #[pyo3(signature = (name, table, replace=false))]
+    fn register(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        table: &Bound<'_, PyAny>,
+        replace: bool,
+    ) -> PyResult<()> {
+        let df = py_to_df(py, table)?;
+        self.inner
+            .register(name, df, replace)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    }
+
+    /// Unregister a previously registered table.
+    ///
+    /// Parameters
+    /// ----------
+    /// name : str
+    ///     The table name to unregister.
+    fn unregister(&self, name: &str) -> PyResult<()> {
+        self.inner
+            .unregister(name)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+    }
+
+    /// Execute a SQL query against the source surface.
+    ///
+    /// Row-returning reads are memoized: an identical query within the TTL
+    /// is served from the cache without hitting the primary.
+    ///
+    /// Parameters
+    /// ----------
+    /// sql : str
+    ///     The SQL query to execute.
+    ///
+    /// Returns
+    /// -------
+    /// pyarrow.Table
+    ///     The query result as a pyarrow Table.
+    fn execute_sql(&self, py: Python<'_>, sql: &str) -> PyResult<Py<PyAny>> {
+        let df = self
+            .inner
+            .execute_sql(sql)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+        df_to_py(py, &df)
+    }
+
+    /// Execute a ggsql query and return the visualization specification.
+    ///
+    /// Base reads hit the (memoized) primary; derived tables are
+    /// materialized into the cache. Unlike a plain bridged reader, queries
+    /// with layer-level sources (VISUALISE ... FROM <table>) work, because
+    /// every layer source is staged through the cache.
+    ///
+    /// Parameters
+    /// ----------
+    /// query : str
+    ///     The ggsql query (SQL + VISUALISE clause).
+    ///
+    /// Returns
+    /// -------
+    /// Spec
+    ///     The resolved visualization specification ready for rendering.
+    ///
+    /// Raises
+    /// ------
+    /// ValueError
+    ///     If the query syntax is invalid or SQL execution fails.
     fn execute(&self, query: &str) -> PyResult<PySpec> {
         self.inner
             .execute(query)
@@ -976,7 +1186,7 @@ fn validate(query: &str) -> PyResult<PyValidated> {
 fn execute(query: &str, reader: &Bound<'_, PyAny>) -> PyResult<PySpec> {
     // Fast path: try all known native reader types
     // Add new native readers to this list as they're implemented
-    try_native_readers!(query, reader, PyDuckDBReader);
+    try_native_readers!(query, reader, PyDuckDBReader, PyCachingReader);
 
     // Bridge path: wrap Python object as Reader
     let bridge = PyReaderBridge {
@@ -996,6 +1206,7 @@ fn execute(query: &str, reader: &Bound<'_, PyAny>) -> PyResult<PySpec> {
 fn _ggsql(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Classes
     m.add_class::<PyDuckDBReader>()?;
+    m.add_class::<PyCachingReader>()?;
     m.add_class::<PySVGWriter>()?;
     m.add_class::<PyPDFWriter>()?;
     m.add_class::<PyHepWriter>()?;

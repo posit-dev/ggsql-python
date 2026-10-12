@@ -10,6 +10,7 @@ Rust logic (parsing, Vega-Lite generation) is tested in the Rust test suite.
 
 import json
 import re
+import time
 import warnings
 from pathlib import Path
 
@@ -958,3 +959,130 @@ class TestBuiltinData:
         )
         svg = ggsql.SVGWriter().render(spec)
         assert "<svg" in svg
+
+
+class _CountingReader:
+    """Bridged primary that counts source reads, backed by duckdb."""
+
+    def __init__(self):
+        self.calls = 0
+        self.conn = duckdb.connect()
+        self.conn.execute(
+            "CREATE TABLE t AS SELECT * FROM (VALUES (1), (2), (3)) AS t(v)"
+        )
+
+    def execute_sql(self, sql: str) -> pa.Table:
+        self.calls += 1
+        return self.conn.execute(sql).arrow()
+
+    def register(self, name: str, table: pa.Table, _replace: bool) -> None:
+        self.conn.register(name, table)
+
+    def unregister(self, name: str) -> None:
+        self.conn.unregister(name)
+
+
+class TestCachingReader:
+    def test_create_with_connection_string(self):
+        reader = ggsql.CachingReader("duckdb://memory")
+        assert reader is not None
+
+    def test_exported_at_package_level(self):
+        assert "CachingReader" in ggsql.__all__
+        assert ggsql.CachingReader.__module__ == "ggsql._ggsql"
+
+    def test_rejects_non_duckdb_scheme(self):
+        with pytest.raises(ValueError, match="duckdb://"):
+            ggsql.CachingReader("sqlite://memory")
+
+    def test_rejects_duckdb_reader_instance(self):
+        inner = ggsql.DuckDBReader("duckdb://memory")
+        with pytest.raises(ValueError, match="connection string"):
+            ggsql.CachingReader(inner)
+
+    def test_execute(self):
+        reader = ggsql.CachingReader("duckdb://memory")
+        spec = reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+        assert spec.metadata()["rows"] == 1
+
+    def test_execute_sql(self):
+        reader = ggsql.CachingReader("duckdb://memory")
+        table = reader.execute_sql("SELECT 1 AS x")
+        assert table.num_rows == 1
+
+    def test_register_and_query(self):
+        reader = ggsql.CachingReader("duckdb://memory")
+        reader.register("mytab", pa.table({"x": [1, 2], "y": [3, 4]}))
+        spec = reader.execute("SELECT * FROM mytab VISUALISE x, y DRAW point")
+        assert spec.metadata()["rows"] == 2
+
+    def test_memoizes_identical_reads(self):
+        primary = _CountingReader()
+        reader = ggsql.CachingReader(primary)
+        reader.execute_sql("SELECT * FROM t")
+        reader.execute_sql("SELECT * FROM t")
+        assert primary.calls == 1
+
+    def test_distinct_reads_each_hit_primary(self):
+        primary = _CountingReader()
+        reader = ggsql.CachingReader(primary)
+        reader.execute_sql("SELECT * FROM t")
+        reader.execute_sql("SELECT v + 1 AS v FROM t")
+        assert primary.calls == 2
+
+    def test_ttl_expiry(self):
+        primary = _CountingReader()
+        reader = ggsql.CachingReader(primary, ttl_secs=1)
+        reader.execute_sql("SELECT * FROM t")
+        time.sleep(1.1)
+        reader.execute_sql("SELECT * FROM t")
+        assert primary.calls == 2
+
+    def test_disabled_kwarg(self):
+        primary = _CountingReader()
+        reader = ggsql.CachingReader(primary, enabled=False)
+        reader.execute_sql("SELECT * FROM t")
+        reader.execute_sql("SELECT * FROM t")
+        assert primary.calls == 2
+
+    def test_disabled_env_var(self, monkeypatch):
+        monkeypatch.setenv("GGSQL_CACHE_DISABLED", "1")
+        primary = _CountingReader()
+        reader = ggsql.CachingReader(primary)
+        reader.execute_sql("SELECT * FROM t")
+        reader.execute_sql("SELECT * FROM t")
+        assert primary.calls == 2
+
+
+class TestCachingReaderCapabilities:
+    """The scenarios querychat cannot serve today without CachingReader."""
+
+    def test_layer_level_source_through_bridge(self):
+        """VISUALISE ... FROM <table> works through a bridged primary.
+
+        This is the querychat scenario: today querychat rejects any query
+        with a layer-level source because it cannot be replayed from one
+        final SQL result. Through CachingReader the layer source is staged
+        into the cache, so the query runs end to end.
+        """
+        primary = _CountingReader()
+        reader = ggsql.CachingReader(primary)
+        spec = reader.execute("VISUALISE x DRAW histogram MAPPING v AS x FROM t")
+        assert spec is not None
+
+    def test_registered_table_routes_to_cache(self):
+        """A registered table is cache-resident; reading it skips the primary."""
+        primary = _CountingReader()
+        reader = ggsql.CachingReader(primary)
+        reader.register("only_in_cache", pa.table({"v": [1, 2, 3]}))
+        spec = reader.execute(
+            "VISUALISE x DRAW histogram MAPPING v AS x FROM only_in_cache"
+        )
+        assert spec is not None
+        assert primary.calls == 0
+
+    def test_top_level_execute_fast_path(self):
+        """ggsql.execute() recognizes CachingReader as native (no bridge)."""
+        reader = ggsql.CachingReader("duckdb://memory")
+        spec = ggsql.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point", reader)
+        assert spec.metadata()["rows"] == 1

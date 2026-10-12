@@ -13,6 +13,7 @@ import narwhals as nw
 from narwhals.typing import IntoFrame
 
 from ggsql._ggsql import (
+    CachingReader,
     DuckDBReader,
     HepWriter as _RustHepWriter,
     PDFWriter as _RustPDFWriter,
@@ -27,6 +28,7 @@ from ggsql._ggsql import (
 # PyO3 classes default to __module__ = "builtins"; point them at their real
 # home so docs tooling (great-docs/griffe) can locate them.
 for _cls in (
+    CachingReader,
     DuckDBReader,
     _RustHepWriter,
     _RustPDFWriter,
@@ -40,6 +42,7 @@ del _cls
 
 __all__ = [
     # Classes
+    "CachingReader",
     "DuckDBReader",
     "SVGWriter",
     "PDFWriter",
