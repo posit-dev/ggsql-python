@@ -842,6 +842,56 @@ class TestWriterDimensionValidation:
             ggsql.save(spec, tmp_path / "plot.svg", width=0)
 
 
+class TestWriterOptions:
+    """The crate's extra writer options are reachable via **options and
+    validated by ggsql (unknown keys and bad values raise ValueError)."""
+
+    @pytest.fixture
+    def spec(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        return reader.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point")
+
+    def test_background_option(self, spec):
+        default = ggsql.SVGWriter().render(spec)
+        transparent = ggsql.SVGWriter(background="transparent").render(spec)
+        assert default != transparent
+
+    def test_text_outline_removes_text_elements(self, spec):
+        assert "<text" in ggsql.SVGWriter().render(spec)
+        assert "<text" not in ggsql.SVGWriter(text="outline").render(spec)
+
+    def test_units_option_scales_dimensions(self, spec):
+        # 6in at 300dpi is 1800px (per the crate's documented semantics)
+        svg = ggsql.SVGWriter(width=6, height=4, units="in", dpi=300).render(spec)
+        assert "1800" in svg
+
+    def test_underscore_keys_match_hyphenated_options(self, spec):
+        # embed_fonts must reach the crate's `embed-fonts` option
+        svg = ggsql.SVGWriter(embed_fonts=False).render(spec)
+        assert "<svg" in svg
+
+    def test_unknown_option_raises(self):
+        with pytest.raises(ValueError, match="unknown writer option 'bogus'"):
+            ggsql.SVGWriter(bogus=1)
+
+    def test_bad_option_value_raises(self):
+        with pytest.raises(ValueError, match="expects a CSS color"):
+            ggsql.SVGWriter(background="not-a-color")
+
+    def test_pdf_options(self, spec):
+        pdf = ggsql.PDFWriter(compress=False, links=False).render(spec)
+        assert pdf.startswith(b"%PDF")
+
+    def test_hep_size_hint_and_options(self, spec):
+        doc = ggsql.HepWriter(width=800, height=600, lossy=True).render(spec)
+        assert len(doc) > 0
+
+    def test_save_passes_options_through(self, spec, tmp_path):
+        out = tmp_path / "plot.svg"
+        ggsql.save(spec, out, background="transparent")
+        assert "<svg" in out.read_text()
+
+
 class TestWriterConcurrency:
     """Native writers release the GIL while rendering; concurrent renders
     of a shared writer and spec must produce identical, correct output."""

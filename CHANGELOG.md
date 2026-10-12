@@ -6,6 +6,7 @@
 
 - New native writers `SVGWriter`, `PDFWriter`, and `HepWriter`, rendered directly by ggsql (via hephaestus) with no JavaScript round-trip. Each exposes `render(spec)` returning `str` (SVG) or `bytes` (PDF/HEP); render warnings are surfaced via `warnings.warn()`.
 - New `ggsql.save(spec, file, ...)` helper that writes a spec to disk, picking the writer from the file extension (`.svg`, `.pdf`, `.hep`, or `.json` for Vega-Lite).
+- The native writers (and `ggsql.save()`) accept the crate's additional writer options as keyword arguments — e.g. `background="transparent"`, `units="in"`, `text="outline"`, `embed_fonts=True`, `compress=False`. Unknown keys and invalid values raise `ValueError`. `HepWriter` can also record optional `width`/`height`/`dpi` hints for a consumer.
 - Enabled the crate's `builtin-data` feature, making builtin datasets such as `ggsql:world` available.
 
 ### Changed

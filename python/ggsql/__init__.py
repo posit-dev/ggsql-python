@@ -120,17 +120,46 @@ def _validate_dimension(name: str, value: int) -> None:
         raise ValueError(f"{name} must be a positive integer, got {value!r}")
 
 
+def _stringify_options(options: dict[str, Any]) -> list[tuple[str, str]]:
+    """Convert writer option values to the strings the crate expects.
+
+    Keys pass through unchanged: the crate normalises them (case- and
+    separator-insensitive), so ``embed_fonts=True`` matches the crate's
+    ``embed-fonts`` spelling. Booleans become ``"true"``/``"false"``.
+    """
+    pairs = []
+    for key, value in options.items():
+        if isinstance(value, bool):
+            value = "true" if value else "false"
+        pairs.append((key, str(value)))
+    return pairs
+
+
 class SVGWriter:
     """SVG output writer using ggsql's native renderer.
 
     Parameters
     ----------
     width
-        Canvas width in pixels.
+        Canvas width in pixels (or in `units` if given).
     height
-        Canvas height in pixels.
+        Canvas height in pixels (or in `units` if given).
     dpi
         Canvas resolution in dots per inch.
+    **options
+        Additional writer options, validated by ggsql (an unknown key or
+        bad value raises ``ValueError``):
+
+        - ``units``: ``"px"`` (default), ``"in"``, ``"cm"``, ``"mm"``, or
+          ``"pt"`` — how `width`/`height` are read.
+        - ``background``: any CSS color; ``"transparent"`` emits no
+          background (default is white).
+        - ``text``: ``"text"`` (default, real selectable text) or
+          ``"outline"`` (glyphs as paths, self-contained).
+        - ``embed_fonts``: inline font files so the SVG renders identically
+          anywhere (default ``False``; can make files much larger).
+        - ``id_prefix``: prefix for generated element ids (avoids id
+          collisions when inlining multiple SVGs into one page).
 
     Methods
     -------
@@ -138,11 +167,13 @@ class SVGWriter:
         Render a Spec to an SVG string.
     """
 
-    def __init__(self, width: int = 600, height: int = 400, dpi: float = 96.0) -> None:
+    def __init__(
+        self, width: int = 600, height: int = 400, dpi: float = 96.0, **options: Any
+    ) -> None:
         _validate_dimension("width", width)
         _validate_dimension("height", height)
         _validate_dpi(dpi)
-        self._inner = _RustSVGWriter(width, height, dpi)
+        self._inner = _RustSVGWriter(width, height, dpi, _stringify_options(options))
 
     def render(self, spec: Spec) -> str:
         """Render a Spec to an SVG string.
@@ -161,11 +192,21 @@ class PDFWriter:
     Parameters
     ----------
     width
-        Canvas width in pixels.
+        Canvas width in pixels (or in `units` if given).
     height
-        Canvas height in pixels.
+        Canvas height in pixels (or in `units` if given).
     dpi
         Canvas resolution in dots per inch.
+    **options
+        Additional writer options, validated by ggsql (an unknown key or
+        bad value raises ``ValueError``):
+
+        - ``units``: ``"px"`` (default), ``"in"``, ``"cm"``, ``"mm"``, or
+          ``"pt"`` — how `width`/`height` are read.
+        - ``background``: any CSS color; ``"transparent"`` emits no
+          background (default is white).
+        - ``compress``: compress content streams (default ``True``).
+        - ``links``: preserve hyperlinks (default ``True``).
 
     Methods
     -------
@@ -173,11 +214,13 @@ class PDFWriter:
         Render a Spec to a PDF document (bytes).
     """
 
-    def __init__(self, width: int = 600, height: int = 400, dpi: float = 96.0) -> None:
+    def __init__(
+        self, width: int = 600, height: int = 400, dpi: float = 96.0, **options: Any
+    ) -> None:
         _validate_dimension("width", width)
         _validate_dimension("height", height)
         _validate_dpi(dpi)
-        self._inner = _RustPDFWriter(width, height, dpi)
+        self._inner = _RustPDFWriter(width, height, dpi, _stringify_options(options))
 
     def render(self, spec: Spec) -> bytes:
         """Render a Spec to a PDF document as bytes.
@@ -196,14 +239,44 @@ class HepWriter:
     A `.hep` document is a self-contained description of the resolved plot
     that a compatible consumer can render and re-layout at any size.
 
+    Parameters
+    ----------
+    width, height, dpi
+        Optional size/resolution *hints* recorded in the document for the
+        consumer to default to — they do not fix the rendered size. If any
+        one is given, the others default to 600, 400, and 96.0 so the hint
+        is complete. By default no hint is recorded.
+    **options
+        Additional writer options, validated by ggsql (an unknown key or
+        bad value raises ``ValueError``):
+
+        - ``background``: any CSS color; ``"transparent"`` for none.
+        - ``lossy``: drop what the format cannot carry (reported as render
+          warnings) instead of failing (default ``False``).
+        - ``embed_fonts``: inline the font files the plot's text needs
+          (default ``False``).
+
     Methods
     -------
     render(spec)
         Render a Spec to a .hep plot document (bytes).
     """
 
-    def __init__(self) -> None:
-        self._inner = _RustHepWriter()
+    def __init__(
+        self,
+        width: int | None = None,
+        height: int | None = None,
+        dpi: float | None = None,
+        **options: Any,
+    ) -> None:
+        if width is not None or height is not None or dpi is not None:
+            width = 600 if width is None else width
+            height = 400 if height is None else height
+            dpi = 96.0 if dpi is None else dpi
+            _validate_dimension("width", width)
+            _validate_dimension("height", height)
+            _validate_dpi(dpi)
+        self._inner = _RustHepWriter(width, height, dpi, _stringify_options(options))
 
     def render(self, spec: Spec) -> bytes:
         """Render a Spec to a .hep plot document as bytes.
@@ -283,6 +356,7 @@ def save(
     width: int = 600,
     height: int = 400,
     dpi: float = 96.0,
+    **options: Any,
 ) -> Path:
     """Save a ggsql spec to a file.
 
@@ -303,6 +377,10 @@ def save(
         Canvas height in pixels (ignored for `.hep` and `.json`).
     dpi
         Canvas resolution in dots per inch (ignored for `.hep` and `.json`).
+    **options
+        Additional writer options (e.g. ``background="transparent"``),
+        passed to the native writer — see `SVGWriter`, `PDFWriter`, and
+        `HepWriter` for the supported keys. Ignored for `.json`.
 
     Returns
     -------
@@ -317,11 +395,13 @@ def save(
     path = Path(file)
     ext = path.suffix.lower()
     if ext == ".svg":
-        path.write_text(SVGWriter(width, height, dpi).render(spec), encoding="utf-8")
+        path.write_text(
+            SVGWriter(width, height, dpi, **options).render(spec), encoding="utf-8"
+        )
     elif ext == ".pdf":
-        path.write_bytes(PDFWriter(width, height, dpi).render(spec))
+        path.write_bytes(PDFWriter(width, height, dpi, **options).render(spec))
     elif ext == ".hep":
-        path.write_bytes(HepWriter().render(spec))
+        path.write_bytes(HepWriter(**options).render(spec))
     elif ext == ".json":
         path.write_text(VegaLiteWriter().render(spec), encoding="utf-8")
     else:

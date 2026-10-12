@@ -15,7 +15,7 @@ use ggsql::reader::{DuckDBReader as RustDuckDBReader, Reader};
 use ggsql::validate::{validate as rust_validate, ValidationWarning};
 use ggsql::writer::{
     HepWriter as RustHepWriter, PdfWriter as RustPdfWriter, SvgWriter as RustSvgWriter,
-    VegaLiteWriter as RustVegaLiteWriter, Writer as RustWriter,
+    VegaLiteWriter as RustVegaLiteWriter, Writer as RustWriter, WriterOptions,
 };
 use ggsql::GgsqlError;
 
@@ -446,6 +446,25 @@ impl PyVegaLiteWriter {
 }
 
 // ============================================================================
+// Writer options
+// ============================================================================
+
+/// Collect extra key-value writer options into the crate's WriterOptions.
+///
+/// Keys are normalised by the crate (case- and separator-insensitive), so
+/// Python kwargs like `embed_fonts=True` arrive as-is and still match the
+/// crate's hyphenated spellings. Typed canvas args (width/height/dpi) are
+/// set by the caller after these, so they win any (impossible-from-Python)
+/// conflict deterministically.
+fn writer_options(extra: &[(String, String)]) -> WriterOptions {
+    let mut opts = WriterOptions::new();
+    for (key, value) in extra {
+        opts = opts.set(key, value);
+    }
+    opts
+}
+
+// ============================================================================
 // PySVGWriter
 // ============================================================================
 
@@ -476,16 +495,25 @@ impl PySVGWriter {
     ///     Canvas height in pixels.
     /// dpi : float
     ///     Canvas resolution in dots per inch.
+    /// options : list[tuple[str, str]]
+    ///     Extra writer options (e.g. background, text, embed-fonts),
+    ///     validated by the crate; an unknown key or bad value is an error.
     ///
     /// Returns
     /// -------
     /// SVGWriter
     ///     A configured SVG writer instance.
     #[new]
-    fn new(width: u32, height: u32, dpi: f64) -> Self {
-        Self {
-            inner: RustSvgWriter::new(width.max(1), height.max(1), dpi),
-        }
+    #[pyo3(signature = (width, height, dpi, options = Vec::new()))]
+    fn new(width: u32, height: u32, dpi: f64, options: Vec<(String, String)>) -> PyResult<Self> {
+        let opts = writer_options(&options)
+            .set("width", width.to_string())
+            .set("height", height.to_string())
+            .set("dpi", dpi.to_string());
+        Ok(Self {
+            inner: RustSvgWriter::from_options(&opts)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?,
+        })
     }
 
     /// Render a Spec to SVG markup.
@@ -550,10 +578,16 @@ impl PyPDFWriter {
     /// PDFWriter
     ///     A configured PDF writer instance.
     #[new]
-    fn new(width: u32, height: u32, dpi: f64) -> Self {
-        Self {
-            inner: RustPdfWriter::new(width.max(1), height.max(1), dpi),
-        }
+    #[pyo3(signature = (width, height, dpi, options = Vec::new()))]
+    fn new(width: u32, height: u32, dpi: f64, options: Vec<(String, String)>) -> PyResult<Self> {
+        let opts = writer_options(&options)
+            .set("width", width.to_string())
+            .set("height", height.to_string())
+            .set("dpi", dpi.to_string());
+        Ok(Self {
+            inner: RustPdfWriter::from_options(&opts)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?,
+        })
     }
 
     /// Render a Spec to a PDF document.
@@ -611,10 +645,29 @@ impl PyHepWriter {
     /// HepWriter
     ///     A configured .hep writer instance.
     #[new]
-    fn new() -> Self {
-        Self {
-            inner: RustHepWriter::default(),
+    #[pyo3(signature = (width = None, height = None, dpi = None, options = Vec::new()))]
+    fn new(
+        width: Option<u32>,
+        height: Option<u32>,
+        dpi: Option<f64>,
+        options: Vec<(String, String)>,
+    ) -> PyResult<Self> {
+        // Size/dpi are recorded as consumer hints only when asked for, so an
+        // optionless writer (the default) carries no hint at all.
+        let mut opts = writer_options(&options);
+        if let Some(width) = width {
+            opts = opts.set("width", width.to_string());
         }
+        if let Some(height) = height {
+            opts = opts.set("height", height.to_string());
+        }
+        if let Some(dpi) = dpi {
+            opts = opts.set("dpi", dpi.to_string());
+        }
+        Ok(Self {
+            inner: RustHepWriter::from_options(&opts)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?,
+        })
     }
 
     /// Render a Spec to a .hep plot document.
