@@ -429,7 +429,11 @@ impl PyCachingReader {
     ///     Cumulative byte budget across memoized results before LRU
     ///     eviction. Default 512 MiB (or GGSQL_CACHE_MAX_BYTES).
     /// enabled : bool, optional
-    ///     When False, reads always hit the primary.
+    ///     When False, source reads always hit the primary: the memo is
+    ///     neither consulted nor written. Note this only disables
+    ///     memoization — registered tables still live in the private
+    ///     in-memory cache, reads referencing them still route there,
+    ///     and derived SQL still runs on the cache backend.
     ///     Default True (unless GGSQL_CACHE_DISABLED is set).
     ///
     /// Raises
