@@ -1,5 +1,11 @@
 # Changelog
 
+## UNRELEASED
+
+### Changed
+
+- Data now crosses the Python↔Rust boundary via the zero-copy Arrow C Data Interface instead of Arrow IPC serialization, reducing memory copies and peak RSS for large results (on a 1M-row × 50-col register+read microbenchmark: ~5.7× faster, ~1 GB lower peak RSS). Set `GGSQL_ARROW_IPC=1` to restore the previous IPC behavior. The minimum pyarrow version is now 15.
+
 ## 0.5.2
 
 ### Added

@@ -272,14 +272,12 @@ fn py_to_df_stream(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame
         ))
     })?;
 
-    let batches: Vec<_> = reader
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Failed to read RecordBatch from Arrow C stream: {}",
-                e
-            ))
-        })?;
+    let batches: Vec<_> = reader.collect::<Result<Vec<_>, _>>().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Failed to read RecordBatch from Arrow C stream: {}",
+            e
+        ))
+    })?;
 
     if batches.is_empty() {
         return Ok(DataFrame::empty());
