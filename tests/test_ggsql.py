@@ -1138,7 +1138,10 @@ class TestArrowBoundaryConversion:
         )
         reader.register("t", pa.table({"ts": ts}))
         result = reader.execute_sql("SELECT ts FROM t")
-        assert sorted(result.column("ts").to_pylist()) == sorted(ts.to_pylist())
+        # Compare as epoch microseconds: to_pylist() on tz-aware timestamps
+        # needs a tz database, which Windows lacks without the tzdata package
+        result_us = result.column("ts").cast(pa.int64()).to_pylist()
+        assert sorted(result_us) == sorted(ts.cast(pa.int64()).to_pylist())
 
     def test_empty_result_set(self, reader):
         """A 0-row query result crosses the Rust->Python boundary cleanly."""
