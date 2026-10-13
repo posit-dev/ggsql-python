@@ -220,6 +220,19 @@ class TestWriterRender:
 class TestSpatial:
     """Tests for spatial (map) layers via the VegaLiteWriter."""
 
+    @pytest.fixture(scope="class", autouse=True)
+    def install_spatial_extension(self):
+        """Install DuckDB's spatial extension (the ggsql crate only LOADs it).
+
+        The binary is cached per DuckDB version/platform under
+        ~/.duckdb/extensions, so this downloads at most once per machine.
+        """
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        try:
+            reader.execute_sql("INSTALL spatial")
+        except Exception as e:
+            pytest.skip(f"DuckDB spatial extension unavailable (offline?): {e}")
+
     def test_render_spatial_builtin_world(self):
         reader = ggsql.DuckDBReader("duckdb://memory")
         spec = reader.execute("VISUALISE FROM ggsql:world DRAW spatial")
