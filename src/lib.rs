@@ -3,9 +3,10 @@
 #![allow(clippy::useless_conversion)]
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyBytes, PyCapsule, PyDict, PyList};
 use std::io::Cursor;
 
+use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 
@@ -23,6 +24,16 @@ use ggsql::GgsqlError;
 // ============================================================================
 // Helper Functions for DataFrame Conversion
 // ============================================================================
+
+/// Whether to use the legacy Arrow IPC serialization path instead of the
+/// zero-copy Arrow C Data Interface path. Enabled by setting GGSQL_ARROW_IPC
+/// to any non-empty value other than "0".
+fn use_ipc_fallback() -> bool {
+    match std::env::var_os("GGSQL_ARROW_IPC") {
+        Some(v) => !v.is_empty() && v != "0",
+        None => false,
+    }
+}
 
 /// Convert a ggsql DataFrame to a Python pyarrow Table via Arrow IPC serialization
 fn df_to_py(py: Python<'_>, df: &DataFrame) -> PyResult<Py<PyAny>> {
@@ -58,8 +69,9 @@ fn df_to_py(py: Python<'_>, df: &DataFrame) -> PyResult<Py<PyAny>> {
     Ok(table.into())
 }
 
-/// Convert a Python pyarrow Table to a ggsql DataFrame via Arrow IPC serialization
-fn py_to_df(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
+/// Convert a Python pyarrow Table to a ggsql DataFrame via Arrow IPC
+/// serialization (legacy fallback; see GGSQL_ARROW_IPC)
+fn py_to_df_ipc(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
     let pa = py.import("pyarrow")?;
     let table = if obj.is_instance(&pa.getattr("Table")?)? {
         obj.clone()
@@ -97,6 +109,82 @@ fn py_to_df(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
         .map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Failed to read RecordBatch: {}",
+                e
+            ))
+        })?;
+
+    if batches.is_empty() {
+        return Ok(DataFrame::empty());
+    }
+
+    let combined = arrow::compute::concat_batches(&batches[0].schema(), &batches).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to concat batches: {}", e))
+    })?;
+
+    Ok(DataFrame::from_record_batch(combined))
+}
+
+/// Convert a Python pyarrow Table to a ggsql DataFrame.
+///
+/// Uses the zero-copy Arrow C Data Interface by default; set GGSQL_ARROW_IPC=1
+/// to fall back to Arrow IPC serialization.
+fn py_to_df(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
+    if use_ipc_fallback() {
+        py_to_df_ipc(py, obj)
+    } else {
+        py_to_df_stream(py, obj)
+    }
+}
+
+/// Convert a Python pyarrow Table to a ggsql DataFrame via the Arrow C Data
+/// Interface (zero-copy).
+fn py_to_df_stream(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
+    let pa = py.import("pyarrow")?;
+    let table = if obj.is_instance(&pa.getattr("Table")?)? {
+        obj.clone()
+    } else {
+        pa.call_method1("table", (obj,)).map_err(|e| {
+            let type_name = obj
+                .get_type()
+                .name()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| "<unknown>".to_string());
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+                "Expected a pyarrow.Table or compatible type, got {}: {}",
+                type_name, e
+            ))
+        })?
+    };
+
+    let capsule = table.call_method0("__arrow_c_stream__")?;
+    let capsule = capsule.downcast::<PyCapsule>().map_err(|_| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "__arrow_c_stream__ did not return a PyCapsule".to_string(),
+        )
+    })?;
+    let stream_ptr = capsule.pointer().cast::<FFI_ArrowArrayStream>();
+    if stream_ptr.is_null() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Invalid Arrow C stream capsule".to_string(),
+        ));
+    }
+
+    // SAFETY: stream_ptr comes from a valid "arrow_array_stream" capsule
+    // produced by pyarrow. from_raw moves the stream out and sets the
+    // capsule's copy to a released state, so the capsule destructor will not
+    // double-release it (it still frees the now-empty allocation).
+    let reader = unsafe { ArrowArrayStreamReader::from_raw(stream_ptr) }.map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Failed to import Arrow C stream: {}",
+            e
+        ))
+    })?;
+
+    let batches: Vec<_> = reader
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Failed to read RecordBatch from Arrow C stream: {}",
                 e
             ))
         })?;
