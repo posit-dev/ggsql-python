@@ -76,6 +76,9 @@ jobs:
 
       - name: Run tests
         shell: bash
+        # Bound the step: a hung extension download once stalled Windows jobs
+        # indefinitely (tests themselves finish in seconds).
+        timeout-minutes: 10
         run: pytest tests/ -v
 
       # The abi3 wheel is identical across Python legs; keep just one for
