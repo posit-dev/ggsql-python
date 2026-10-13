@@ -217,6 +217,44 @@ class TestWriterRender:
         assert "layer" in spec_dict
 
 
+class TestSpatial:
+    """Tests for spatial (map) layers via the VegaLiteWriter."""
+
+    def test_render_spatial_builtin_world(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("VISUALISE FROM ggsql:world DRAW spatial")
+        writer = ggsql.VegaLiteWriter()
+
+        result = writer.render(spec)
+        spec_dict = json.loads(result)
+        marks = [
+            layer["mark"]["type"] if isinstance(layer["mark"], dict) else layer["mark"]
+            for layer in spec_dict["layer"]
+        ]
+        assert "geoshape" in marks
+
+    def test_render_spatial_choropleth(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute(
+            "VISUALISE FROM ggsql:world DRAW spatial MAPPING population AS fill"
+        )
+        writer = ggsql.VegaLiteWriter()
+
+        result = writer.render(spec)
+        assert "geoshape" in result
+
+    def test_render_chart_spatial(self):
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        spec = reader.execute("VISUALISE FROM ggsql:world DRAW spatial")
+        writer = ggsql.VegaLiteWriter()
+
+        chart = writer.render_chart(spec)
+        assert isinstance(chart, altair.TopLevelMixin)
+        # The chart survives Altair-level round-tripping (this is how the
+        # spec reaches the browser widget)
+        assert "projection" in chart.to_dict()
+
+
 class TestRenderAltairDataFrameConversion:
     """Tests for DataFrame handling in render_altair()."""
 

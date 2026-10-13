@@ -1,5 +1,11 @@
 # Changelog
 
+## UNRELEASED
+
+### Added
+
+- Enabled the crate's `spatial` feature, so `DRAW spatial` map layers now render through the Vega-Lite writer instead of raising "Spatial visualization requires the 'spatial' feature to be enabled". Geometry columns (WKB) and the built-in `ggsql:world` dataset work out of the box with the default projection. Named map projections (e.g. `PROJECT TO mercator`) and `ST_*` SQL functions additionally require the DuckDB `spatial` extension (`INSTALL spatial; LOAD spatial;`).
+
 ## 0.5.2
 
 ### Added
