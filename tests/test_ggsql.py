@@ -12,6 +12,7 @@ import json
 import re
 import time
 import warnings
+from datetime import datetime
 from pathlib import Path
 
 import duckdb
@@ -1137,3 +1138,120 @@ class TestCachingReaderCapabilities:
         reader = ggsql.CachingReader("duckdb://memory")
         spec = ggsql.execute("SELECT 1 AS x, 2 AS y VISUALISE x, y DRAW point", reader)
         assert spec.metadata()["rows"] == 1
+
+
+class TestArrowBoundaryConversion:
+    """Edge cases for the Arrow C Data Interface boundary, with IPC parity.
+
+    Each test runs twice: once on the default zero-copy C stream path and
+    once with GGSQL_ARROW_IPC=1 (the legacy IPC fallback).
+    """
+
+    @pytest.fixture(params=["stream", "ipc"])
+    def boundary_mode(self, request, monkeypatch):
+        if request.param == "ipc":
+            monkeypatch.setenv("GGSQL_ARROW_IPC", "1")
+        else:
+            monkeypatch.delenv("GGSQL_ARROW_IPC", raising=False)
+        return request.param
+
+    @pytest.fixture
+    def reader(self, boundary_mode):
+        return ggsql.DuckDBReader("duckdb://memory")
+
+    def test_dictionary_encoded_column(self, boundary_mode):
+        """Dictionary-encoded columns cross the Python->Rust boundary.
+
+        Exercised via a custom Python reader because DuckDBReader.register
+        cannot ingest dictionary columns (DuckDB ArrowVTab limitation,
+        pre-existing in both boundary modes).
+        """
+        codes = ["a", "b", "a", "c", "b"] * 20
+
+        class DictReader:
+            def execute_sql(self, sql):
+                return pa.table(
+                    {
+                        "x": list(range(len(codes))),
+                        "cat": pa.array(codes).dictionary_encode(),
+                    }
+                )
+
+        spec = ggsql.execute(
+            "SELECT * FROM t VISUALISE x, cat DRAW point", DictReader()
+        )
+        assert spec.metadata()["rows"] == len(codes)
+
+    def test_timestamp_with_timezone(self, reader):
+        ts = pa.array(
+            [datetime(2024, 1, 1, 12, 0), datetime(2024, 6, 15, 8, 30)],
+            type=pa.timestamp("us", tz="UTC"),
+        )
+        reader.register("t", pa.table({"ts": ts}))
+        result = reader.execute_sql("SELECT ts FROM t")
+        # Compare as epoch microseconds: to_pylist() on tz-aware timestamps
+        # needs a tz database, which Windows lacks without the tzdata package
+        result_us = result.column("ts").cast(pa.int64()).to_pylist()
+        assert sorted(result_us) == sorted(ts.cast(pa.int64()).to_pylist())
+
+    def test_empty_result_set(self, reader):
+        """A 0-row query result crosses the Rust->Python boundary cleanly."""
+        reader.register("t", pa.table({"x": pa.array([1, 2, 3], type=pa.int64())}))
+        result = reader.execute_sql("SELECT * FROM t WHERE x > 100")
+        assert result.num_rows == 0
+
+    def test_register_empty_table_parity(self, reader):
+        """Registering a 0-row table fails identically in both modes.
+
+        Pre-existing behavior: py_to_df (both IPC and C stream) collapses a
+        0-batch table to DataFrame::empty() with an empty schema, which
+        DuckDB's ArrowVTab rejects. Documented here as parity, not fixed.
+        """
+        table = pa.table({"x": pa.array([], type=pa.int64())})
+        with pytest.raises(ValueError, match="at least one column"):
+            reader.register("t", table)
+
+    def test_chunked_table(self, reader):
+        batches = [
+            pa.record_batch({"x": pa.array(range(i * 100, (i + 1) * 100))})
+            for i in range(5)
+        ]
+        table = pa.Table.from_batches(batches)
+        reader.register("t", table)
+        result = reader.execute_sql("SELECT x FROM t")
+        assert sorted(result.column("x").to_pylist()) == list(range(500))
+
+    def test_nullable_columns(self, reader):
+        table = pa.table(
+            {
+                "a": pa.array([1, None, 3], type=pa.int64()),
+                "b": pa.array(["x", None, "z"]),
+            }
+        )
+        reader.register("t", table)
+        result = reader.execute_sql("SELECT * FROM t")
+        assert result.column("a").to_pylist().count(None) == 1
+        assert sorted(v for v in result.column("a").to_pylist() if v is not None) == [1, 3]
+        assert result.column("b").to_pylist().count(None) == 1
+
+    def test_extension_type(self, reader):
+        uuid_type = getattr(pa, "uuid", None)
+        if uuid_type is None:
+            pytest.skip("no uuid extension type in this pyarrow")
+        import uuid as uuid_mod
+
+        uuids = [uuid_mod.UUID(int=i) for i in range(5)]
+        table = pa.table({"u": pa.array(uuids, type=uuid_type())})
+        reader.register("t", table)
+        result = reader.execute_sql("SELECT u FROM t")
+        # Extension metadata degrades to the storage type (binary) through
+        # DuckDB in both boundary modes; the values must survive
+        assert sorted(result.column("u").to_pylist()) == sorted(u.bytes for u in uuids)
+
+    def test_ipc_fallback_env_var(self, monkeypatch):
+        """GGSQL_ARROW_IPC=1 forces the legacy IPC path (smoke test)."""
+        monkeypatch.setenv("GGSQL_ARROW_IPC", "1")
+        reader = ggsql.DuckDBReader("duckdb://memory")
+        reader.register("t", pa.table({"x": [1, 2, 3]}))
+        result = reader.execute_sql("SELECT * FROM t")
+        assert result.column("x").to_pylist() == [1, 2, 3]

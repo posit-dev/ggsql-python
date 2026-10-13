@@ -3,9 +3,11 @@
 #![allow(clippy::useless_conversion)]
 
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyBytes, PyCapsule, PyDict, PyList};
 use std::io::Cursor;
 
+use arrow::array::RecordBatchIterator;
+use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 
@@ -24,8 +26,19 @@ use ggsql::GgsqlError;
 // Helper Functions for DataFrame Conversion
 // ============================================================================
 
-/// Convert a ggsql DataFrame to a Python pyarrow Table via Arrow IPC serialization
-fn df_to_py(py: Python<'_>, df: &DataFrame) -> PyResult<Py<PyAny>> {
+/// Whether to use the legacy Arrow IPC serialization path instead of the
+/// zero-copy Arrow C Data Interface path. Enabled by setting GGSQL_ARROW_IPC
+/// to any non-empty value other than "0".
+fn use_ipc_fallback() -> bool {
+    match std::env::var_os("GGSQL_ARROW_IPC") {
+        Some(v) => !v.is_empty() && v != "0",
+        None => false,
+    }
+}
+
+/// Convert a ggsql DataFrame to a Python pyarrow Table via Arrow IPC
+/// serialization (legacy fallback; see GGSQL_ARROW_IPC)
+fn df_to_py_ipc(py: Python<'_>, df: &DataFrame) -> PyResult<Py<PyAny>> {
     let rb = df.inner();
     let mut buffer = Vec::new();
     {
@@ -58,8 +71,99 @@ fn df_to_py(py: Python<'_>, df: &DataFrame) -> PyResult<Py<PyAny>> {
     Ok(table.into())
 }
 
-/// Convert a Python pyarrow Table to a ggsql DataFrame via Arrow IPC serialization
-fn py_to_df(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
+/// Convert a ggsql DataFrame to a Python pyarrow Table.
+///
+/// Uses the zero-copy Arrow C Data Interface by default; set GGSQL_ARROW_IPC=1
+/// to fall back to Arrow IPC serialization.
+fn df_to_py(py: Python<'_>, df: &DataFrame) -> PyResult<Py<PyAny>> {
+    if use_ipc_fallback() {
+        df_to_py_ipc(py, df)
+    } else {
+        df_to_py_stream(py, df)
+    }
+}
+
+/// Convert a ggsql DataFrame to a Python pyarrow Table via the Arrow C Data
+/// Interface (zero-copy).
+fn df_to_py_stream(py: Python<'_>, df: &DataFrame) -> PyResult<Py<PyAny>> {
+    let rb = df.inner().clone();
+    let schema = rb.schema();
+    let reader = RecordBatchIterator::new(std::iter::once(Ok(rb)), schema);
+    let stream = FFI_ArrowArrayStream::new(Box::new(reader));
+    let stream_ptr = Box::into_raw(Box::new(stream));
+
+    // SAFETY: stream_ptr is a valid allocation we own; the capsule takes
+    // ownership, and c_stream_capsule_destructor reclaims it.
+    let capsule_ptr = unsafe {
+        pyo3::ffi::PyCapsule_New(
+            stream_ptr.cast(),
+            c"arrow_array_stream".as_ptr(),
+            Some(c_stream_capsule_destructor),
+        )
+    };
+    if capsule_ptr.is_null() {
+        // Capsule creation failed; reclaim the allocation and propagate.
+        unsafe { drop(Box::from_raw(stream_ptr)) };
+        return Err(PyErr::fetch(py));
+    }
+    // SAFETY: capsule_ptr is a new reference to a valid PyCapsule object.
+    let capsule = unsafe { Py::<PyAny>::from_owned_ptr(py, capsule_ptr) };
+
+    let shim = Py::new(py, ArrowStreamShim { capsule })?;
+    let pa = py.import("pyarrow")?;
+    let table = pa
+        .getattr("RecordBatchReader")?
+        .call_method1("from_stream", (shim,))?
+        .call_method0("read_all")?;
+    Ok(table.into())
+}
+
+/// Capsule destructor honoring the Arrow C Stream Interface contract: if the
+/// stream was never consumed (its release callback is still set), release it;
+/// then reclaim the allocation. When pyarrow consumes the stream it moves the
+/// contents out and nulls the release callback, so this destructor only frees
+/// the (now-empty) allocation in that case.
+unsafe extern "C" fn c_stream_capsule_destructor(capsule: *mut pyo3::ffi::PyObject) {
+    let ptr = unsafe { pyo3::ffi::PyCapsule_GetPointer(capsule, c"arrow_array_stream".as_ptr()) }
+        .cast::<FFI_ArrowArrayStream>();
+    if ptr.is_null() {
+        return;
+    }
+    let mut stream = unsafe { Box::from_raw(ptr) };
+    if let Some(release) = stream.release {
+        // SAFETY: per the C Data Interface contract, release is called at
+        // most once and marks the stream as released.
+        unsafe { release(&mut *stream) };
+    }
+}
+
+/// Python-side holder for an Arrow C Stream capsule, exposing the
+/// `__arrow_c_stream__` protocol so pyarrow can consume the stream.
+#[pyclass]
+struct ArrowStreamShim {
+    capsule: Py<PyAny>,
+}
+
+#[pymethods]
+impl ArrowStreamShim {
+    #[pyo3(signature = (requested_schema=None))]
+    fn __arrow_c_stream__(
+        &self,
+        py: Python<'_>,
+        requested_schema: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        if requested_schema.is_some_and(|s| !s.is_none()) {
+            return Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
+                "requested_schema is not supported",
+            ));
+        }
+        Ok(self.capsule.clone_ref(py))
+    }
+}
+
+/// Convert a Python pyarrow Table to a ggsql DataFrame via Arrow IPC
+/// serialization (legacy fallback; see GGSQL_ARROW_IPC)
+fn py_to_df_ipc(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
     let pa = py.import("pyarrow")?;
     let table = if obj.is_instance(&pa.getattr("Table")?)? {
         obj.clone()
@@ -100,6 +204,80 @@ fn py_to_df(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
                 e
             ))
         })?;
+
+    if batches.is_empty() {
+        return Ok(DataFrame::empty());
+    }
+
+    let combined = arrow::compute::concat_batches(&batches[0].schema(), &batches).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to concat batches: {}", e))
+    })?;
+
+    Ok(DataFrame::from_record_batch(combined))
+}
+
+/// Convert a Python pyarrow Table to a ggsql DataFrame.
+///
+/// Uses the zero-copy Arrow C Data Interface by default; set GGSQL_ARROW_IPC=1
+/// to fall back to Arrow IPC serialization.
+fn py_to_df(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
+    if use_ipc_fallback() {
+        py_to_df_ipc(py, obj)
+    } else {
+        py_to_df_stream(py, obj)
+    }
+}
+
+/// Convert a Python pyarrow Table to a ggsql DataFrame via the Arrow C Data
+/// Interface (zero-copy).
+fn py_to_df_stream(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<DataFrame> {
+    let pa = py.import("pyarrow")?;
+    let table = if obj.is_instance(&pa.getattr("Table")?)? {
+        obj.clone()
+    } else {
+        pa.call_method1("table", (obj,)).map_err(|e| {
+            let type_name = obj
+                .get_type()
+                .name()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| "<unknown>".to_string());
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
+                "Expected a pyarrow.Table or compatible type, got {}: {}",
+                type_name, e
+            ))
+        })?
+    };
+
+    let capsule = table.call_method0("__arrow_c_stream__")?;
+    let capsule = capsule.downcast::<PyCapsule>().map_err(|_| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "__arrow_c_stream__ did not return a PyCapsule".to_string(),
+        )
+    })?;
+    let stream_ptr = capsule.pointer().cast::<FFI_ArrowArrayStream>();
+    if stream_ptr.is_null() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Invalid Arrow C stream capsule".to_string(),
+        ));
+    }
+
+    // SAFETY: stream_ptr comes from a valid "arrow_array_stream" capsule
+    // produced by pyarrow. from_raw moves the stream out and sets the
+    // capsule's copy to a released state, so the capsule destructor will not
+    // double-release it (it still frees the now-empty allocation).
+    let reader = unsafe { ArrowArrayStreamReader::from_raw(stream_ptr) }.map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Failed to import Arrow C stream: {}",
+            e
+        ))
+    })?;
+
+    let batches: Vec<_> = reader.collect::<Result<Vec<_>, _>>().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Failed to read RecordBatch from Arrow C stream: {}",
+            e
+        ))
+    })?;
 
     if batches.is_empty() {
         return Ok(DataFrame::empty());
@@ -1213,6 +1391,7 @@ fn _ggsql(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyVegaLiteWriter>()?;
     m.add_class::<PyValidated>()?;
     m.add_class::<PySpec>()?;
+    m.add_class::<ArrowStreamShim>()?;
 
     // Functions
     m.add_function(wrap_pyfunction!(validate, m)?)?;
