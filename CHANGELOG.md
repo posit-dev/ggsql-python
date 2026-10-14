@@ -6,6 +6,10 @@
 
 - Enabled the crate's `spatial` feature, so `DRAW spatial` map layers now render through the Vega-Lite writer instead of raising "Spatial visualization requires the 'spatial' feature to be enabled". Spatial layers require DuckDB's `spatial` extension at runtime: ggsql issues `LOAD spatial` automatically but never `INSTALL` it, so run `INSTALL spatial` once per machine (e.g. via `DuckDBReader.execute_sql()`; the download is cached under `~/.duckdb/extensions`). Works with WKB geometry columns and the built-in `ggsql:world` dataset, including named map projections such as `PROJECT TO equal_earth`.
 
+### Removed
+
+- Removed `Spec.layer_sql()` and `Spec.stat_sql()`. These mirrored a vestigial Rust API that returned `None` in every released crate since v0.1.6 (the backing fields were never populated after the scale-syntax rewrite) and was removed upstream in ggsql PR #569. No functionality is lost.
+
 ### Changed
 
 - Data now crosses the Python↔Rust boundary via the zero-copy Arrow C Data Interface instead of Arrow IPC serialization, reducing memory copies and peak RSS for large results (on a 1M-row × 50-col register+read microbenchmark: ~5.7× faster, ~1 GB lower peak RSS). Set `GGSQL_ARROW_IPC=1` to restore the previous IPC behavior. The minimum pyarrow version is now 15.
