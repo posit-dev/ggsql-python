@@ -4,6 +4,7 @@
 
 ### Added
 
+- New `CachingReader.execute_sql_cached()` method that runs SQL on the reader's private in-memory cache connection — the compute surface where all ggsql-generated derived SQL executes — instead of the primary data source. This is the surface for per-connection setup that derived SQL depends on: e.g. `INSTALL`/`LOAD` of DuckDB extensions such as `spatial`, which would fail on a locked-down primary and take no effect on the cache even where it succeeds.
 - Enabled the crate's `spatial` feature, so `DRAW spatial` map layers now render through the Vega-Lite writer instead of raising "Spatial visualization requires the 'spatial' feature to be enabled". Spatial layers require DuckDB's `spatial` extension at runtime: ggsql issues `LOAD spatial` automatically but never `INSTALL` it, so run `INSTALL spatial` once per machine (e.g. via `DuckDBReader.execute_sql()`; the download is cached under `~/.duckdb/extensions`). Works with WKB geometry columns and the built-in `ggsql:world` dataset, including named map projections such as `PROJECT TO equal_earth`.
 
 ### Changed
