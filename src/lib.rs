@@ -1255,36 +1255,6 @@ impl PySpec {
             .transpose()
     }
 
-    /// Layer filter/source query, or None if using global data.
-    ///
-    /// Parameters
-    /// ----------
-    /// index : int
-    ///     The layer index (0-based).
-    ///
-    /// Returns
-    /// -------
-    /// str | None
-    ///     The filter SQL query, or None if the layer uses global data directly.
-    fn layer_sql(&self, index: usize) -> Option<String> {
-        self.inner.layer_sql(index).map(|s| s.to_string())
-    }
-
-    /// Stat transform query, or None if no stat transform.
-    ///
-    /// Parameters
-    /// ----------
-    /// index : int
-    ///     The layer index (0-based).
-    ///
-    /// Returns
-    /// -------
-    /// str | None
-    ///     The stat transform SQL query, or None if no stat transform.
-    fn stat_sql(&self, index: usize) -> Option<String> {
-        self.inner.stat_sql(index).map(|s| s.to_string())
-    }
-
     /// Validation warnings from preparation.
     ///
     /// Returns
