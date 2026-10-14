@@ -1062,6 +1062,24 @@ class TestCachingReader:
         table = reader.execute_sql("SELECT 1 AS x")
         assert table.num_rows == 1
 
+    def test_execute_sql_cached(self):
+        """execute_sql_cached runs on the cache, never touching the primary.
+
+        This is the surface for per-connection setup that ggsql's derived
+        SQL depends on (e.g. INSTALL/LOAD of DuckDB extensions), which
+        would fail or take no effect on a locked-down primary.
+        """
+        primary = _CountingReader()
+        reader = ggsql.CachingReader(primary)
+        table = reader.execute_sql_cached("SELECT 42 AS x")
+        assert table.column("x").to_pylist() == [42]
+        assert primary.calls == 0
+
+    def test_execute_sql_cached_error(self):
+        reader = ggsql.CachingReader("duckdb://memory")
+        with pytest.raises(ValueError):
+            reader.execute_sql_cached("SELECT * FROM __ggsql_missing__")
+
     def test_register_and_query(self):
         reader = ggsql.CachingReader("duckdb://memory")
         reader.register("mytab", pa.table({"x": [1, 2], "y": [3, 4]}))

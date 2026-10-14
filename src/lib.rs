@@ -741,6 +741,33 @@ impl PyCachingReader {
         df_to_py(py, &df)
     }
 
+    /// Execute a SQL query against the cache backend (compute surface).
+    ///
+    /// All ggsql-generated derived SQL runs on the private in-memory cache
+    /// connection, so this is the surface to use for statements that must
+    /// take effect there — e.g. `INSTALL spatial; LOAD spatial`, which the
+    /// spatial geom requires on the cache connection. Routing such
+    /// statements through `execute_sql` would send them to the primary data
+    /// source instead, where they typically fail (locked-down connections)
+    /// and do nothing for the cache.
+    ///
+    /// Parameters
+    /// ----------
+    /// sql : str
+    ///     The SQL statement to execute on the cache connection.
+    ///
+    /// Returns
+    /// -------
+    /// pyarrow.Table
+    ///     The query result as a pyarrow Table.
+    fn execute_sql_cached(&self, py: Python<'_>, sql: &str) -> PyResult<Py<PyAny>> {
+        let df = self
+            .inner
+            .execute_sql_cached(sql)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+        df_to_py(py, &df)
+    }
+
     /// Execute a ggsql query and return the visualization specification.
     ///
     /// Base reads hit the (memoized) primary; derived tables are
