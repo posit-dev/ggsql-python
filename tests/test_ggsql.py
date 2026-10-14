@@ -543,8 +543,6 @@ class TestTwoStageAPIIntegration:
         # Layer-specific accessors (may return None)
         _ = spec.layer_data(0)
         _ = spec.stat_data(0)
-        _ = spec.layer_sql(0)
-        _ = spec.stat_sql(0)
 
 
 class TestCustomReader:
